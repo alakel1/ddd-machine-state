@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Database locale (dati dei domini)
+*.sqlite3
+*.sqlite3-journal
+
+# Frontend
+node_modules/
+frontend/dist/
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+*.swp
+
+# Env
+.env
+.env.*
