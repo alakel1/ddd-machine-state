@@ -1,4 +1,5 @@
 import { reactive } from 'vue'
+import { t, locale } from './i18n'
 
 export const store = reactive({
   domains: [],
@@ -12,13 +13,14 @@ let toastId = 0
 export function toast(message, kind = 'info') {
   const id = ++toastId
   store.toasts.push({ id, message, kind })
-  setTimeout(() => (store.toasts = store.toasts.filter((t) => t.id !== id)), 4000)
+  setTimeout(() => (store.toasts = store.toasts.filter((x) => x.id !== id)), 4000)
 }
 
 async function request(method, url, body) {
   const res = await fetch(url, {
     method,
-    headers: body ? { 'Content-Type': 'application/json' } : {},
+    // il backend traduce analisi, conflitti ed errori nella lingua dell'interfaccia
+    headers: { 'X-Lang': locale.value, ...(body ? { 'Content-Type': 'application/json' } : {}) },
     body: body ? JSON.stringify(body) : undefined,
   })
   if (!res.ok) {
@@ -60,13 +62,13 @@ export function entity(id) {
 }
 // stato implicito "non esiste" delle entità con azioni di creazione
 export const NONE = 0
-export const NONE_STATE = { id: NONE, name: 'NON_ESISTE', virtual: true }
-export const isCreatable = (e) => !!e?.transitions.some((t) => t.kind === 'create')
+export const noneState = () => ({ id: NONE, name: t('state.none'), virtual: true })
+export const isCreatable = (e) => !!e?.transitions.some((x) => x.kind === 'create')
 /** Stati selezionabili dell'entità: NON_ESISTE in testa se l'entità è creabile. */
-export const statesOf = (e) => (e ? (isCreatable(e) ? [{ ...NONE_STATE, entity_id: e.id }, ...e.states] : e.states) : [])
+export const statesOf = (e) => (e ? (isCreatable(e) ? [{ ...noneState(), entity_id: e.id }, ...e.states] : e.states) : [])
 
 export function stateById(id) {
-  if (id === NONE) return NONE_STATE
+  if (id === NONE) return noneState()
   for (const e of store.model?.entities || []) {
     const s = e.states.find((s) => s.id === id)
     if (s) return s
@@ -74,6 +76,6 @@ export function stateById(id) {
 }
 export const sname = (id) => (id == null ? '∗' : stateById(id)?.name ?? '?')
 export const ename = (id) => entity(id)?.name ?? '?'
-// stati in cui un figlio "non c'è più", proposti dai nomi (stessa regola del backend)
-const GONE_WORDS = /ELIMIN|CESTIN|CANCELL|ANNULL|STORN|RIMOSS|ARCHIV|DELET/i
+// stati in cui un figlio "non c'è più", proposti dai nomi in it/en (stessa regola del backend)
+const GONE_WORDS = /ELIMIN|CESTIN|CANCEL|ANNULL|STORN|RIMOSS|ARCHIV|DELET|REMOV|TRASH|VOID|REVERS|WITHDRAW/i
 export const suggestChildGone = (e) => [NONE, ...(e?.states || []).filter((s) => s.is_final && GONE_WORDS.test(s.name)).map((s) => s.id)]

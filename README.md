@@ -6,7 +6,7 @@ Machine Status is a modelling tool for functional analysts. You describe a domai
 
 ![Edge case analysis](docs/screenshots/analysis.png)
 
-> The UI is in Italian. The example domain (an e-commerce order with payment, shipment and invoice) ships with a few deliberate gaps, so you can run the analysis and see what it finds.
+> The UI is available in **English** and **Italian** (switch from the sidebar). The example domain, an Italian e-commerce order with payment, shipment and invoice, ships with a few deliberate gaps so you can run the analysis and see what it finds.
 
 ## Features
 
@@ -48,12 +48,12 @@ JSON (round-trip import) and a functional specification in Markdown, analysis in
 |---|---|
 | **Entity** | Aggregate, entity or value object, with bounded context, attributes and lifecycle |
 | **State** | One initial state, zero or more final states |
-| **Creation action** | A way the entity comes into existence: from `NON_ESISTE` ("does not exist") to a state, with its own guards, effects and actor. An entity can have several |
+| **Creation action** | A way the entity comes into existence: from `DOES_NOT_EXIST` to a state, with its own guards, effects and actor. An entity can have several |
 | **Action** | A transition `from → to` (from "any" = from every non-final state), with an actor |
 | **State guard** | Precondition: another entity must (or must not) be in given states |
 | **Rule** | Free-text business condition, shown as "to be verified" |
 | **Cascading effect** | The action forces another entity to change state, run an action or be created. If no valid transition exists, it's a **conflict** |
-| **Invariant** | A forbidden combination of states (AND of conditions); may use `NON_ESISTE` |
+| **Invariant** | A forbidden combination of states (AND of conditions); may use `DOES_NOT_EXIST` |
 | **Composition** | The child cannot exist without the parent. The tool derives an invariant from it and checks that creating the child requires the parent and that the parent's removal drags the children along |
 | **Multiple instances** | On a composition, simulate 2–3 children per parent in the analysis (e.g. "one item confirmed, the other deleted") |
 
@@ -87,12 +87,13 @@ The database is `backend/ddd.sqlite3` (override with `DDD_DB`). On first start a
 |---|---|
 | Backend | Python, FastAPI, SQLite (no ORM) |
 | Engine | Pure Python state machine + BFS model checker (`backend/app/engine.py`, `relations.py`) |
-| Frontend | Vue 3, Vue Router, Tailwind CSS 4, Mermaid, Font Awesome |
+| Frontend | Vue 3, Vue Router, vue-i18n, Tailwind CSS 4, Mermaid, Font Awesome |
 
 ```
 backend/app/
   engine.py        state machine, cascade propagation, exploration, analysis
   relations.py     compositions, multiple instances, relation checks
+  i18n.py          server-side messages (analysis, conflicts, export) in en/it
   db.py            schema, migrations, generic CRUD
   main.py          REST API
   portability.py   JSON import / Markdown export
@@ -100,6 +101,7 @@ backend/app/
 frontend/src/
   views/           Home, Model, Entity, Invariants, Simulator, Analysis
   components/      Mermaid, StateChip, StatePicker, Trace, Modal, PageHeader
+  locales/         UI translations (en.json, it.json)
   diagrams.js      Mermaid generators (state diagram, context map)
   store.js         reactive store and API client
 ```

@@ -21,6 +21,6 @@ function toggle(id) {
       class="rounded-md px-2 py-1 font-mono text-[11.5px] font-medium ring-1 ring-inset transition cursor-pointer"
       :class="[modelValue.includes(s.id) ? pal(e.color).soft + ' !ring-2' : 'bg-white text-zinc-400 ring-zinc-200 hover:text-zinc-700', s.virtual && 'italic']"
     >{{ s.name }}</button>
-    <span v-if="!e" class="text-xs text-zinc-400">Scegli un'entità</span>
+    <span v-if="!e" class="text-xs text-zinc-400">{{ $t('picker.chooseEntity') }}</span>
   </div>
 </template>

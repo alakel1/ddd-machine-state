@@ -1,4 +1,5 @@
 import { pal } from './colors'
+import { t } from './i18n'
 
 const q = (s) => String(s ?? '').replace(/["#:;]/g, ' ').trim()
 
@@ -8,21 +9,21 @@ export function stateDiagram(entity, { current = null, highlight = [], direction
   const c = pal(entity.color)
   const L = ['stateDiagram-v2', `  direction ${direction}`]
   for (const s of entity.states) L.push(`  state "${q(s.name)}" as s${s.id}`)
-  const creations = entity.transitions.filter((t) => t.kind === 'create')
+  const creations = entity.transitions.filter((x) => x.kind === 'create')
   if (!creations.length) for (const s of entity.states.filter((s) => s.is_initial)) L.push(`  [*] --> s${s.id}`)
-  for (const t of entity.transitions) {
-    const lock = t.guards.some((g) => g.kind === 'state') ? " <i class='fa-solid fa-lock'></i>" : ''
-    const fx = t.effects.length ? " <i class='fa-solid fa-bolt'></i>" : ''
-    const cascade = t.cascade_only ? " <i class='fa-solid fa-arrows-turn-right'></i>" : ''
-    const label = `${q(t.action)}${cascade}${lock}${fx}`
-    if (t.kind === 'create') {
-      L.push(`  [*] --> s${t.to_state_id} : ${label}`)
+  for (const tr of entity.transitions) {
+    const lock = tr.guards.some((g) => g.kind === 'state') ? " <i class='fa-solid fa-lock'></i>" : ''
+    const fx = tr.effects.length ? " <i class='fa-solid fa-bolt'></i>" : ''
+    const cascade = tr.cascade_only ? " <i class='fa-solid fa-arrows-turn-right'></i>" : ''
+    const label = `${q(tr.action)}${cascade}${lock}${fx}`
+    if (tr.kind === 'create') {
+      L.push(`  [*] --> s${tr.to_state_id} : ${label}`)
       continue
     }
-    const froms = t.from_state_id
-      ? [t.from_state_id]
-      : entity.states.filter((s) => !s.is_final && s.id !== t.to_state_id).map((s) => s.id)
-    for (const f of froms) L.push(`  s${f} --> s${t.to_state_id} : ${label}`)
+    const froms = tr.from_state_id
+      ? [tr.from_state_id]
+      : entity.states.filter((s) => !s.is_final && s.id !== tr.to_state_id).map((s) => s.id)
+    for (const f of froms) L.push(`  s${f} --> s${tr.to_state_id} : ${label}`)
   }
   for (const s of entity.states.filter((s) => s.is_final)) L.push(`  s${s.id} --> [*]`)
   L.push(`  classDef final fill:#fafafa,stroke:#a1a1aa,stroke-width:2px,stroke-dasharray:4 3,color:#3f3f46`)
@@ -45,8 +46,9 @@ export function contextMap(model, { dependencies = true } = {}) {
   Object.entries(groups).forEach(([ctx, ents], i) => {
     L.push(`  subgraph ctx${i}["${q(ctx)}"]`)
     for (const e of ents) {
-      const kind = { aggregate: 'fa:fa-cubes aggregato', entity: 'fa:fa-cube entità', value_object: 'fa:fa-gem value object' }[e.kind] || ''
-      L.push(`    e${e.id}["<b>${q(e.name)}</b><br/><small>${kind} · ${e.states.length} stati</small>"]`)
+      const icon = { aggregate: 'fa:fa-cubes', entity: 'fa:fa-cube', value_object: 'fa:fa-gem' }[e.kind]
+      const kind = icon ? `${icon} ${t(`kind.${e.kind}`).toLowerCase()}` : ''
+      L.push(`    e${e.id}["<b>${q(e.name)}</b><br/><small>${kind} · ${t('diagram.states', e.states.length)}</small>"]`)
     }
     L.push('  end')
   })
@@ -55,7 +57,7 @@ export function contextMap(model, { dependencies = true } = {}) {
   for (const r of model.relations) {
     if (r.composition) {
       // composizione: il figlio non esiste senza il padre
-      L.push(`  e${r.source_id} -- "fa:fa-cubes-stacked ${q(r.label) || 'contiene'} ${q(r.cardinality)}" --o e${r.target_id}`)
+      L.push(`  e${r.source_id} -- "fa:fa-cubes-stacked ${q(r.label) || q(t('diagram.contains'))} ${q(r.cardinality)}" --o e${r.target_id}`)
       linkStyles.push(`  linkStyle ${idx} stroke:#3f3f46,stroke-width:2.5px`)
     } else {
       L.push(`  e${r.source_id} -- "${q(r.label)} ${q(r.cardinality)}" --> e${r.target_id}`)
@@ -65,17 +67,17 @@ export function contextMap(model, { dependencies = true } = {}) {
   if (dependencies) {
     const seen = new Set()
     for (const e of model.entities)
-      for (const t of e.transitions) {
-        for (const g of t.guards)
+      for (const tr of e.transitions) {
+        for (const g of tr.guards)
           if (g.kind === 'state' && g.entity_id && g.entity_id !== e.id && !seen.has(`g${e.id}-${g.entity_id}`)) {
             seen.add(`g${e.id}-${g.entity_id}`)
-            L.push(`  e${e.id} -. "dipende da" .-> e${g.entity_id}`)
+            L.push(`  e${e.id} -. "${q(t('diagram.dependsOn'))}" .-> e${g.entity_id}`)
             linkStyles.push(`  linkStyle ${idx++} stroke:#a1a1aa,stroke-width:1px`)
           }
-        for (const f of t.effects)
+        for (const f of tr.effects)
           if (f.entity_id !== e.id && !seen.has(`f${e.id}-${f.entity_id}`)) {
             seen.add(`f${e.id}-${f.entity_id}`)
-            L.push(`  e${e.id} == "fa:fa-bolt effetto" ==> e${f.entity_id}`)
+            L.push(`  e${e.id} == "fa:fa-bolt ${q(t('diagram.effect'))}" ==> e${f.entity_id}`)
             linkStyles.push(`  linkStyle ${idx++} stroke:#f59e0b,stroke-width:2px`)
           }
       }

@@ -3,6 +3,7 @@ import { computed, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { store, loadDomains, loadModel, api, toast } from './store'
 import { pal, COLORS } from './colors'
+import { t, locale, setLocale, LOCALES } from './i18n'
 
 const route = useRoute()
 const router = useRouter()
@@ -13,22 +14,24 @@ watch(domainId, (id) => {
   if (id && store.model?.id !== id) loadModel(id)
   if (!id) store.model = null
 }, { immediate: true })
+// nomi derivati dal backend (invarianti delle composizioni) seguono la lingua
+watch(locale, () => store.model && loadModel(store.model.id))
 
 const nav = computed(() => [
-  { to: 'model', label: 'Panoramica', icon: 'table-cells-large' },
-  { to: 'invariants', label: 'Invarianti', icon: 'shield-halved', count: store.model?.invariants.length },
-  { to: 'simulator', label: 'Simulatore', icon: 'play' },
-  { to: 'analysis', label: 'Analisi edge case', icon: 'magnifying-glass-chart' },
+  { to: 'model', label: t('nav.overview'), icon: 'table-cells-large' },
+  { to: 'invariants', label: t('nav.invariants'), icon: 'shield-halved', count: store.model?.invariants.length },
+  { to: 'simulator', label: t('nav.simulator'), icon: 'play' },
+  { to: 'analysis', label: t('nav.analysis'), icon: 'magnifying-glass-chart' },
 ])
 
 async function addEntity() {
   const e = await api.post('/entities', {
-    domain_id: domainId.value, name: 'NuovaEntità', pos: store.model.entities.length,
+    domain_id: domainId.value, name: t('entity.defaultName'), pos: store.model.entities.length,
     color: COLORS[store.model.entities.length % COLORS.length],
   })
   await loadModel(domainId.value)
   router.push(`/d/${domainId.value}/entity/${e.id}`)
-  toast('Entità creata')
+  toast(t('toast.entityCreated'))
 }
 </script>
 
@@ -47,14 +50,14 @@ async function addEntity() {
       </RouterLink>
 
       <div class="px-3 pt-4">
-        <label class="px-2 eyebrow !text-zinc-600">Dominio</label>
+        <label class="px-2 eyebrow !text-zinc-600">{{ $t('nav.domain') }}</label>
         <div class="relative mt-1.5">
           <select
             :value="domainId ?? ''"
             @change="(e) => router.push(e.target.value ? `/d/${e.target.value}/model` : '/')"
             class="w-full appearance-none rounded-lg bg-white/5 ring-1 ring-white/10 px-3 py-2 pr-8 text-sm text-white focus:outline-none focus:ring-indigo-500/60 cursor-pointer"
           >
-            <option value="" class="text-zinc-900">— Tutti i domini —</option>
+            <option value="" class="text-zinc-900">{{ $t('nav.allDomains') }}</option>
             <option v-for="d in store.domains" :key="d.id" :value="d.id" class="text-zinc-900">{{ d.name }}</option>
           </select>
           <i class="fa-solid fa-sort fa-fw text-[14px] absolute right-2.5 top-2.5 text-zinc-500 pointer-events-none" />
@@ -64,7 +67,7 @@ async function addEntity() {
       <nav class="flex-1 overflow-y-auto px-3 py-4 space-y-6">
         <div v-if="!domainId">
           <RouterLink to="/" class="flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm bg-white/10 text-white">
-            <i class="fa-solid fa-house fa-fw text-[14px]" /> Domini
+            <i class="fa-solid fa-house fa-fw text-[14px]" /> {{ $t('nav.domains') }}
           </RouterLink>
         </div>
         <template v-else>
@@ -82,8 +85,8 @@ async function addEntity() {
 
           <div>
             <div class="flex items-center justify-between px-2.5 mb-1.5">
-              <span class="eyebrow !text-zinc-600">Entità</span>
-              <button class="icon-btn !size-6 !text-zinc-500 hover:!bg-white/10 hover:!text-white" title="Nuova entità" @click="addEntity">
+              <span class="eyebrow !text-zinc-600">{{ $t('nav.entities') }}</span>
+              <button class="icon-btn !size-6 !text-zinc-500 hover:!bg-white/10 hover:!text-white" :title="$t('nav.newEntity')" @click="addEntity">
                 <i class="fa-solid fa-plus fa-fw text-[12px]" />
               </button>
             </div>
@@ -102,15 +105,25 @@ async function addEntity() {
         </template>
       </nav>
 
-      <div v-if="domainId" class="p-3 border-t border-white/5 grid grid-cols-2 gap-2">
-        <a :href="`/api/domains/${domainId}/export`" :download="`dominio-${domainId}.json`"
-           class="flex items-center justify-center gap-1.5 rounded-lg py-2 text-xs bg-white/5 hover:bg-white/10 hover:text-white transition">
-          <i class="fa-solid fa-file-code fa-fw text-[12px]" /> JSON
-        </a>
-        <a :href="`/api/domains/${domainId}/export.md`" :download="`specifica-${domainId}.md`"
-           class="flex items-center justify-center gap-1.5 rounded-lg py-2 text-xs bg-white/5 hover:bg-white/10 hover:text-white transition">
-          <i class="fa-solid fa-file-lines fa-fw text-[12px]" /> Specifica .md
-        </a>
+      <div class="p-3 border-t border-white/5 space-y-2">
+        <div v-if="domainId" class="grid grid-cols-2 gap-2">
+          <a :href="`/api/domains/${domainId}/export`" :download="$t('nav.jsonFile', { id: domainId })"
+             class="flex items-center justify-center gap-1.5 rounded-lg py-2 text-xs bg-white/5 hover:bg-white/10 hover:text-white transition">
+            <i class="fa-solid fa-file-code fa-fw text-[12px]" /> JSON
+          </a>
+          <a :href="`/api/domains/${domainId}/export.md?lang=${locale}`" :download="$t('nav.mdFile', { id: domainId })"
+             class="flex items-center justify-center gap-1.5 rounded-lg py-2 text-xs bg-white/5 hover:bg-white/10 hover:text-white transition">
+            <i class="fa-solid fa-file-lines fa-fw text-[12px]" /> {{ $t('nav.specMd') }}
+          </a>
+        </div>
+        <div class="flex items-center gap-2 px-1">
+          <i class="fa-solid fa-language fa-fw text-[14px] text-zinc-500" :title="$t('nav.language')" />
+          <div class="flex-1 grid grid-cols-2 gap-1 rounded-lg bg-white/5 p-0.5">
+            <button v-for="(label, code) in LOCALES" :key="code" @click="setLocale(code)"
+                    class="rounded-md py-1 text-[11px] font-semibold transition cursor-pointer"
+                    :class="locale === code ? 'bg-white/15 text-white' : 'text-zinc-500 hover:text-white'">{{ label }}</button>
+          </div>
+        </div>
       </div>
     </aside>
 

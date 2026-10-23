@@ -3,9 +3,9 @@ from . import db
 from .engine import Engine
 
 
-def import_model(conn, m: dict) -> int:
+def import_model(conn, m: dict, default_name: str = "") -> int:
     """Inserisce un modello (formato di load_model) rimappando tutti gli id."""
-    did = db.insert(conn, "domains", {"name": m.get("name") or "Dominio importato",
+    did = db.insert(conn, "domains", {"name": m.get("name") or default_name,
                                       "description": m.get("description", "")})
     E, S, T = {}, {}, {}
     for i, e in enumerate(m["entities"]):
@@ -60,71 +60,73 @@ def import_model(conn, m: dict) -> int:
     return did
 
 
-def export_markdown(m: dict) -> str:
-    eng = Engine(m)
-    sn, en = eng.sname, eng.ename
+def export_markdown(m: dict, lang: str | None = None) -> str:
+    eng = Engine(m, lang)
+    t, sn, en = eng.t, eng.sname, eng.ename
     L = [f"# {m['name']}", "", m["description"] or "", ""]
 
     contexts = {}
     for e in m["entities"]:
         contexts.setdefault(e["context"] or "—", []).append(e["name"])
-    L += ["## Bounded context", ""]
+    L += [f"## {t('md.contexts')}", ""]
     L += [f"- **{c}**: {', '.join(n)}" for c, n in contexts.items()] + [""]
 
     if m["relations"]:
-        L += ["## Relazioni", "", "| Da | Relazione | A | Cardinalità | Composizione |", "|---|---|---|---|---|"]
+        L += [f"## {t('md.relations')}", "", t("md.relations_header"), "|---|---|---|---|---|"]
         L += [f"| {en(r['source_id'])} | {r['label']} | {en(r['target_id'])} | {r['cardinality']} | "
-              + (f"{en(r['target_id'])} non esiste senza {en(r['source_id'])}" if r.get("composition") else "") + " |"
+              + (t("md.composition", child=en(r["target_id"]), parent=en(r["source_id"])) if r.get("composition") else "") + " |"
               for r in m["relations"]]
         L += [""]
 
     for e in m["entities"]:
-        L += [f"## {e['name']}", "", f"*{e['kind']}* · contesto: {e['context'] or '—'}", "", e["description"] or "", ""]
+        L += [f"## {e['name']}", "", t("md.context_line", kind=t(f"kind.{e['kind']}"), context=e["context"] or "—"), "",
+              e["description"] or "", ""]
         if e["attributes"]:
-            L += ["### Attributi", "", "| Nome | Tipo | Obbl. | Note |", "|---|---|---|---|"]
-            L += [f"| {a['name']} | {a['type']} | {'sì' if a['required'] else ''} | {a['description']} |" for a in e["attributes"]]
+            L += [f"### {t('md.attributes')}", "", t("md.attributes_header"), "|---|---|---|---|"]
+            L += [f"| {a['name']} | {a['type']} | {t('md.yes') if a['required'] else ''} | {a['description']} |" for a in e["attributes"]]
             L += [""]
         if e["states"]:
-            L += ["### Stati", ""]
+            L += [f"### {t('md.states')}", ""]
             for s in e["states"]:
-                tags = (" `iniziale`" if s["is_initial"] else "") + (" `finale`" if s["is_final"] else "")
+                tags = (f" `{t('md.initial')}`" if s["is_initial"] else "") + (f" `{t('md.final')}`" if s["is_final"] else "")
                 L.append(f"- **{s['name']}**{tags}" + (f" — {s['description']}" if s["description"] else ""))
             L.append("")
         if e["transitions"]:
-            L += ["### Azioni", "", "| Da | Azione | A | Attore | Guardie | Effetti |", "|---|---|---|---|---|---|"]
-            for t in e["transitions"]:
+            L += [f"### {t('md.actions')}", "", t("md.actions_header"), "|---|---|---|---|---|---|"]
+            for tr in e["transitions"]:
                 gs = []
-                for g in t["guards"]:
+                for g in tr["guards"]:
                     if g["kind"] == "rule":
-                        gs.append(f"[regola] {g['description']}")
+                        gs.append(t("md.rule", text=g["description"]))
                     else:
                         op = "∉" if g["negate"] else "∈"
                         gs.append(f"{en(g['entity_id'])} {op} {{{', '.join(sn(x) for x in g['state_ids'])}}}")
-                fx = [f"{en(f['entity_id'])} → " + ("*nasce*" if f.get("kind") == "create"
-                                                   else f"esegue «{f.get('action')}»" if f.get("kind") == "action"
+                fx = [f"{en(f['entity_id'])} → " + (t("md.created") if f.get("kind") == "create"
+                                                   else t("md.runs", action=f.get("action")) if f.get("kind") == "action"
                                                    else sn(f["to_state_id"]))
-                      for f in t["effects"]]
-                frm = "*(creazione)*" if t.get("kind") == "create" else (
-                    sn(t["from_state_id"]) if t["from_state_id"] else "*(qualsiasi)*")
-                L.append(f"| {frm} | **{t['action']}** | {sn(t['to_state_id'])} | {t['actor']} | "
+                      for f in tr["effects"]]
+                frm = t("md.creation") if tr.get("kind") == "create" else (
+                    sn(tr["from_state_id"]) if tr["from_state_id"] else t("md.any"))
+                L.append(f"| {frm} | **{tr['action']}** | {sn(tr['to_state_id'])} | {tr['actor']} | "
                          f"{'<br>'.join(gs)} | {'<br>'.join(fx)} |")
             L.append("")
 
     if m["invariants"]:
-        L += ["## Invarianti", ""]
+        L += [f"## {t('md.invariants')}", ""]
         for inv in m["invariants"]:
-            cond = " **E** ".join(
+            cond = f" {t('md.and')} ".join(
                 f"{en(r['entity_id'])} {'∉' if r.get('negate') else '∈'} {{{', '.join(sn(x) for x in r['state_ids'])}}}"
                 for r in inv["rules"])
-            L += [f"- **{inv['name']}** ({inv['severity']}): vietato quando {cond}" +
+            L += [t("md.forbidden", name=inv["name"], severity=t(f"severity.{inv['severity']}"), cond=cond) +
                   (f" — {inv['description']}" if inv["description"] else "")]
         L.append("")
 
     res = eng.analyze()
-    L += ["## Analisi edge case", "",
-          f"Stati globali raggiungibili: {res['stats']['reachable']} su {res['stats']['theoretical']} teorici.", ""]
+    L += [f"## {t('md.analysis')}", "",
+          t("md.reachable", reachable=res["stats"]["reachable"], theoretical=res["stats"]["theoretical"]), ""]
     for i in res["issues"]:
-        L.append(f"- [{i['severity'].upper()}] **{i['title']}** {i['detail']}")
+        sev = t(f"severity.{i['severity']}").upper()
+        L.append(f"- [{sev}] **{i['title']}** {i['detail']}")
         if i.get("trace"):
-            L.append("  - percorso: " + " → ".join(f"{en(s['entity_id'])}.{s['action']}" for s in i["trace"]))
+            L.append(f"  - {t('md.path')}: " + " → ".join(f"{en(s['entity_id'])}.{s['action']}" for s in i["trace"]))
     return "\n".join(L) + "\n"

@@ -14,10 +14,10 @@ import json
 import threading
 from collections import OrderedDict, deque
 
+from .i18n import translator
 from .relations import derived_invariants, expand, relation_issues
 
 NONE = 0  # stato implicito "non esiste" (gli id SQLite partono da 1)
-NONE_NAME = "NON_ESISTE"
 MAX_CASCADE_DEPTH = 8
 DEFAULT_EXPLORE_LIMIT = 300_000
 _EXPLORE_CACHE: "OrderedDict[tuple, dict]" = OrderedDict()  # esplorazioni recenti, per modello e limite
@@ -30,15 +30,16 @@ def is_create(t: dict) -> bool:
 
 
 class Engine:
-    def __init__(self, model: dict):
+    def __init__(self, model: dict, lang: str | None = None):
         self.model = model
+        self.t = translator(lang)
         self.entities = [e for e in model["entities"] if e["states"]]
         self.entity = {e["id"]: e for e in model["entities"]}
         self.state = {s["id"]: s for e in model["entities"] for s in e["states"]}
         self.transitions = [t for e in model["entities"] for t in e["transitions"]]
         self.transition = {t["id"]: t for t in self.transitions}
         # le composizioni aggiungono le loro invarianti (già incluse se il modello è stato espanso)
-        self.invariants = model["invariants"] + ([] if model.get("_derived_done") else derived_invariants(model))
+        self.invariants = model["invariants"] + ([] if model.get("_derived_done") else derived_invariants(model, self.t))
         self.order = [e["id"] for e in self.entities]
         self._outgoing = {}
         # forme precompilate per i percorsi caldi dell'esplorazione
@@ -55,7 +56,7 @@ class Engine:
     # ---------- utilità di naming ----------
     def sname(self, sid):
         if sid == NONE:
-            return NONE_NAME
+            return self.t("none_state")
         s = self.state.get(sid)
         return s["name"] if s else "∅"
 
@@ -69,7 +70,7 @@ class Engine:
 
     def states_of(self, eid) -> list[dict]:
         """Stati dell'entità, preceduti da NON_ESISTE se l'entità è creabile."""
-        virtual = [{"id": NONE, "name": NONE_NAME, "virtual": True}] if eid in self.creatable else []
+        virtual = [{"id": NONE, "name": self.t("none_state"), "virtual": True}] if eid in self.creatable else []
         return virtual + self.entity[eid]["states"]
 
     # ---------- stato ----------
@@ -138,9 +139,9 @@ class Engine:
                 ok = check(cur)
             if not ok:
                 names = ", ".join(self.sname(s) for s in g["state_ids"]) or "—"
-                op = "non deve essere in" if g["negate"] else "deve essere in"
+                op = self.t("guard.must_not" if g["negate"] else "guard.must")
                 fails.append(
-                    f"{self.ename(g['entity_id'])} {op} [{names}] (ora: {self.sname(cur)})"
+                    self.t("guard.fail", entity=self.ename(g["entity_id"]), op=op, states=names, current=self.sname(cur))
                     + (f" — {g['description']}" if g["description"] else "")
                 )
         return fails
@@ -181,7 +182,7 @@ class Engine:
             cur = new[eid]
             if eff.get("skip_final") and self.is_final(cur) and cur != target:
                 # effetto su "tutte le istanze attive": un'istanza già conclusa (es. nel cestino) è esclusa
-                steps.append({"transition_id": None, "entity_id": eid, "action": "(conclusa, esclusa)",
+                steps.append({"transition_id": None, "entity_id": eid, "action": self.t("step.excluded"),
                               "from": cur, "to": cur, "depth": depth + 1, "skipped": True})
                 continue
             if eff.get("kind") in ("create", "action"):
@@ -192,16 +193,16 @@ class Engine:
                 continue
             if cur == target:
                 continue
-            label = f"effetto «{t['action']}» → {self.ename(eid)}: {self.sname(cur)} → {self.sname(target)}"
+            label = self.t("effect.label_state", action=t["action"], entity=self.ename(eid), src=self.sname(cur), dst=self.sname(target))
             cands = [c for c in self.outgoing(eid, cur) if c["to_state_id"] == target]
             if not cands and cur == NONE:
                 # l'entità non esiste e non c'è un modo di crearla in quello stato:
                 # l'effetto non si applica (es. "annulla il pagamento" quando non c'è pagamento)
-                steps.append({"transition_id": None, "entity_id": eid, "action": "(non esiste, ignorato)",
+                steps.append({"transition_id": None, "entity_id": eid, "action": self.t("step.missing"),
                               "from": cur, "to": cur, "depth": depth + 1, "skipped": True})
                 continue
             if not cands:
-                conflicts.append(f"{label}: nessuna transizione definita da {self.sname(cur)} a {self.sname(target)}")
+                conflicts.append(self.t("effect.no_transition", label=label, src=self.sname(cur), dst=self.sname(target)))
                 new[eid] = target
                 steps.append({"transition_id": None, "entity_id": eid, "action": "(forzato)",
                               "from": cur, "to": target, "depth": depth + 1, "forced": True})
@@ -214,13 +215,13 @@ class Engine:
                     break
                 why += f
             if chosen is None:
-                conflicts.append(f"{label}: «{cands[0]['action']}» bloccata — " + "; ".join(why))
+                conflicts.append(self.t("effect.blocked", label=label, action=cands[0]["action"], why="; ".join(why)))
                 new[eid] = target
                 steps.append({"transition_id": None, "entity_id": eid, "action": "(forzato)",
                               "from": cur, "to": target, "depth": depth + 1, "forced": True})
                 continue
             if chosen["id"] in chain or depth >= MAX_CASCADE_DEPTH:
-                conflicts.append(f"{label}: ciclo di effetti a cascata su «{chosen['action']}»")
+                conflicts.append(self.t("effect.cycle_on", label=label, action=chosen["action"]))
                 continue
             new, sub_steps, sub_conf = self.fire(chosen, new, depth + 1, chain)
             steps += sub_steps
@@ -231,10 +232,10 @@ class Engine:
         """Effetto "esegui azione": l'entità esegue l'azione con quel nome disponibile dal suo stato attuale."""
         eid, name = eff["entity_id"], eff.get("action", "").strip()
         cur = state[eid]
-        label = f"effetto «{t['action']}» → {self.ename(eid)} deve eseguire «{name}»"
+        label = self.t("effect.label_action", action=t["action"], entity=self.ename(eid), name=name)
         if cur == NONE:
             # nessuna istanza da coinvolgere (es. un regolamento senza modelli): l'effetto non si applica
-            return state, [{"transition_id": None, "entity_id": eid, "action": f"(non esiste, «{name}» ignorata)",
+            return state, [{"transition_id": None, "entity_id": eid, "action": self.t("step.missing_action", action=name),
                             "from": cur, "to": cur, "depth": depth + 1, "skipped": True}], []
         same_name = [c for c in self.entity[eid]["transitions"] if c["action"].strip().lower() == name.lower()]
         cands = [c for c in same_name if self.applies_from(c, cur)]
@@ -242,7 +243,7 @@ class Engine:
             # già nello stato a cui l'azione porta (es. arrivata in cascata da un altro ramo): niente da fare
             return state, [], []
         if not cands:
-            return state, [], [f"{label}, ma da {self.sname(cur)} l'azione non è disponibile"]
+            return state, [], [self.t("effect.action_unavailable", label=label, state=self.sname(cur))]
         ok, why = [], []
         for c in cands:
             f = self.guard_failures(c, state)
@@ -251,39 +252,39 @@ class Engine:
             else:
                 ok.append(c)
         if not ok:
-            return state, [], [f"{label}, ma è bloccata — " + "; ".join(why)]
+            return state, [], [self.t("effect.action_blocked", label=label, why="; ".join(why))]
         if len(ok) > 1:
             names = ", ".join(self.sname(c["to_state_id"]) for c in ok)
-            return state, [], [f"{label}, ma da {self.sname(cur)} porta in più stati ({names}): ambiguo"]
+            return state, [], [self.t("effect.action_ambiguous", label=label, state=self.sname(cur), targets=names)]
         if ok[0]["id"] in chain or depth >= MAX_CASCADE_DEPTH:
-            return state, [], [f"{label}: ciclo di effetti a cascata"]
+            return state, [], [self.t("effect.cycle", label=label)]
         return self.fire(ok[0], state, depth + 1, chain)
 
     def _fire_creation(self, t: dict, eff: dict, state: dict, depth: int, chain: frozenset):
         """Effetto "crea": l'entità nasce tramite l'unica azione di creazione con guardie soddisfatte."""
         eid = eff["entity_id"]
-        label = f"effetto «{t['action']}» → {self.ename(eid)} deve nascere"
+        label = self.t("effect.label_create", action=t["action"], entity=self.ename(eid))
         if state[eid] != NONE:
             # un'istanza esiste già: con relazioni 1-N ne nascerebbe un'altra, che il simulatore non rappresenta
-            return state, [{"transition_id": None, "entity_id": eid, "action": "(esiste già, nuova istanza non simulata)",
+            return state, [{"transition_id": None, "entity_id": eid, "action": self.t("step.already_exists"),
                              "from": state[eid], "to": state[eid], "depth": depth + 1, "skipped": True}], []
         creations = [c for c in self.entity[eid]["transitions"] if is_create(c)]
         if not creations:
-            return state, [], [f"{label}, ma non ha azioni di creazione"]
+            return state, [], [self.t("effect.no_creations", label=label)]
         ok, why = [], []
         for c in creations:
             f = self.guard_failures(c, state)
             if f:
-                why.append(f"«{c['action']}»: " + "; ".join(f))
+                why.append(self.t("q", x=c["action"]) + ": " + "; ".join(f))
             else:
                 ok.append(c)
         if not ok:
-            return state, [], [f"{label}, ma nessuna creazione è possibile — " + " | ".join(why)]
+            return state, [], [self.t("effect.no_creation_possible", label=label, why=" | ".join(why))]
         if len(ok) > 1:
-            names = ", ".join(f"«{c['action']}» → {self.sname(c['to_state_id'])}" for c in ok)
-            return state, [], [f"{label}, ma più creazioni sono possibili insieme ({names}): stato di nascita ambiguo"]
+            names = ", ".join(f"{self.t('q', x=c['action'])} → {self.sname(c['to_state_id'])}" for c in ok)
+            return state, [], [self.t("effect.creations_ambiguous", label=label, options=names)]
         if ok[0]["id"] in chain or depth >= MAX_CASCADE_DEPTH:
-            return state, [], [f"{label}: ciclo di effetti a cascata su «{ok[0]['action']}»"]
+            return state, [], [self.t("effect.cycle_on", label=label, action=ok[0]["action"])]
         return self.fire(ok[0], state, depth + 1, chain)
 
     def triggers(self, t: dict) -> list[dict]:
@@ -332,13 +333,15 @@ class Engine:
                 "rules": self.rule_notes(t), "create": is_create(t),
             }
             if not self.applies_from(t, state[eid]):
-                why = "esiste già" if is_create(t) else f"è in {self.sname(state[eid])}"
-                actions.append({**base, "status": "unavailable", "reasons": [f"{self.ename(eid)} {why}"]})
+                why = self.t("eval.exists", entity=self.ename(eid)) if is_create(t) \
+                    else self.t("eval.is_in", entity=self.ename(eid), state=self.sname(state[eid]))
+                actions.append({**base, "status": "unavailable", "reasons": [why]})
                 continue
             if t.get("cascade_only"):
-                via = ", ".join(f"«{x['action']}» ({self.ename(x['entity_id'])})" for x in self.triggers(t)) or "nessuna azione"
+                via = ", ".join(f"{self.t('q', x=x['action'])} ({self.ename(x['entity_id'])})" for x in self.triggers(t)) \
+                    or self.t("eval.no_action")
                 actions.append({**base, "status": "blocked", "cascade_only": True,
-                                "reasons": [f"Avviene solo in cascata, come effetto di: {via}"]})
+                                "reasons": [self.t("eval.cascade_only", via=via)]})
                 continue
             fails = self.guard_failures(t, state)
             if fails:
@@ -360,17 +363,17 @@ class Engine:
         state = self.normalize(state)
         t = self.transition.get(transition_id)
         if not t:
-            return {"ok": False, "error": "Transizione inesistente"}
+            return {"ok": False, "error": self.t("apply.no_transition")}
         if not self.applies_from(t, state[t["entity_id"]]) and not force:
-            return {"ok": False, "error": f"«{t['action']}» non disponibile da {self.sname(state[t['entity_id']])}"}
+            return {"ok": False, "error": self.t("apply.unavailable", action=t["action"], state=self.sname(state[t["entity_id"]]))}
         if t.get("cascade_only") and not force:
-            return {"ok": False, "error": f"«{t['action']}» avviene solo in cascata"}
+            return {"ok": False, "error": self.t("apply.cascade_only", action=t["action"])}
         fails = self.guard_failures(t, state)
         if fails and not force:
-            return {"ok": False, "error": "Guardie non soddisfatte", "reasons": fails}
+            return {"ok": False, "error": self.t("apply.guards"), "reasons": fails}
         new, steps, conflicts = self.fire(t, state)
         if conflicts and not force:
-            return {"ok": False, "error": "Conflitto negli effetti", "reasons": conflicts}
+            return {"ok": False, "error": self.t("apply.conflict"), "reasons": conflicts}
         return {"ok": True, "state": new, "steps": steps, "conflicts": conflicts,
                 "forced": bool(force and (fails or conflicts)), "violations": self.violations(new)}
 
@@ -378,7 +381,7 @@ class Engine:
     def explore(self, start: dict | None = None, limit: int = DEFAULT_EXPLORE_LIMIT) -> dict:
         # l'esplorazione è il calcolo costoso: analisi e matrice la condividono finché il modello non cambia
         key = (hashlib.sha1(json.dumps(self.model, sort_keys=True, default=str).encode()).hexdigest(),
-               json.dumps(start, sort_keys=True), limit)
+               json.dumps(start, sort_keys=True), limit, self.t.lang)
         with _EXPLORE_LOCK:
             if key in _EXPLORE_CACHE:
                 _EXPLORE_CACHE.move_to_end(key)
@@ -462,28 +465,29 @@ class Engine:
 
     def analyze(self, limit: int = DEFAULT_EXPLORE_LIMIT) -> dict:
         issues = []
+        T, q = self.t, lambda x: self.t("q", x=x)
 
-        def add(sev, cat, title, detail="", **extra):
-            issues.append({"severity": sev, "category": cat, "title": title, "detail": detail, **extra})
+        # category è un codice stabile: il frontend lo traduce e ci filtra sopra
+        def add(sev, cat, key, detail=None, params=None, **extra):
+            params = params or {}
+            issues.append({"severity": sev, "category": cat, "title": T(f"{key}.title", **params),
+                           "detail": T(f"{key}.detail", **params) if detail is None else detail, **extra})
 
         # --- analisi statica per entità ---
         for e in self.model["entities"]:
             name, sts = e["name"], e["states"]
             if not sts:
-                add("info", "modello", f"{name} non ha stati", "L'entità non partecipa alla macchina a stati.", entity_id=e["id"])
+                add("info", "model", "a.no_states", params={"entity": name}, entity_id=e["id"])
                 continue
             creations = [t for t in e["transitions"] if is_create(t)]
             inits = [s for s in sts if s["is_initial"]]
             if not creations and not inits:
-                add("error", "modello", f"{name}: nessuno stato iniziale né azione di creazione",
-                    f"Verrà usato «{sts[0]['name']}» come punto di partenza.", entity_id=e["id"])
+                add("error", "model", "a.no_start", params={"entity": name, "state": sts[0]["name"]}, entity_id=e["id"])
             elif not creations and len(inits) > 1:
-                add("warning", "modello", f"{name}: più stati iniziali",
-                    "Per più modi di nascere usa le azioni di creazione: " + ", ".join(s["name"] for s in inits),
-                    entity_id=e["id"])
+                add("warning", "model", "a.many_initial",
+                    params={"entity": name, "states": ", ".join(s["name"] for s in inits)}, entity_id=e["id"])
             if not any(s["is_final"] for s in sts):
-                add("info", "modello", f"{name}: nessuno stato finale",
-                    "Il ciclo di vita non ha una conclusione esplicita.", entity_id=e["id"])
+                add("info", "model", "a.no_final", params={"entity": name}, entity_id=e["id"])
 
             # raggiungibilità locale (ignorando le guardie)
             starts = {t["to_state_id"] for t in creations} if creations else {(inits or sts)[0]["id"]}
@@ -495,30 +499,26 @@ class Engine:
                         seen.add(t["to_state_id"])
                         stack.append(t["to_state_id"])
             for s in sts:
+                p = {"entity": name, "state": s["name"]}
                 if s["id"] not in seen:
-                    add("warning", "raggiungibilità", f"{name}.{s['name']} irraggiungibile",
-                        "Nessun percorso di transizioni porta a questo stato, anche ignorando le guardie.",
-                        entity_id=e["id"], state_id=s["id"])
+                    add("warning", "reachability", "a.unreachable", params=p, entity_id=e["id"], state_id=s["id"])
                 outs = self.outgoing(e["id"], s["id"])
                 if not s["is_final"] and not outs:
-                    add("warning", "vicolo cieco", f"{name}.{s['name']} è un vicolo cieco",
-                        "Stato non finale senza transizioni in uscita: l'entità rimane bloccata.",
-                        entity_id=e["id"], state_id=s["id"])
+                    add("warning", "dead_end", "a.dead_end", params=p, entity_id=e["id"], state_id=s["id"])
                 if s["is_final"] and any(t["from_state_id"] == s["id"] and not is_create(t) for t in e["transitions"]):
-                    add("warning", "modello", f"{name}.{s['name']} è finale ma ha transizioni in uscita",
-                        entity_id=e["id"], state_id=s["id"])
+                    add("warning", "model", "a.final_outgoing", detail="", params=p, entity_id=e["id"], state_id=s["id"])
                 by_action = {}
                 for t in outs:
                     by_action.setdefault(t["action"].strip().lower(), set()).add(t["to_state_id"])
                 for act, targets in by_action.items():
                     if len(targets) > 1:
-                        add("warning", "non determinismo", f"{name}.{s['name']}: «{act}» ha più destinazioni",
-                            " / ".join(self.sname(x) for x in targets), entity_id=e["id"], state_id=s["id"])
+                        add("warning", "nondeterminism", "a.nondeterminism", detail=" / ".join(self.sname(x) for x in targets),
+                            params={**p, "action": act}, entity_id=e["id"], state_id=s["id"])
 
             for t in e["transitions"]:
                 if t.get("cascade_only") and not self.triggers(t):
-                    add("warning", "cascata", f"«{t['action']}» ({name}) è solo in cascata ma nessuna azione la innesca",
-                        "Nessun effetto di altre azioni porta a eseguirla: non avverrà mai.", entity_id=e["id"], transition_id=t["id"])
+                    add("warning", "cascade", "a.cascade_never", params={"entity": name, "action": t["action"]},
+                        entity_id=e["id"], transition_id=t["id"])
 
             # nascite che saltano i controlli del percorso normale
             for c in creations:
@@ -529,67 +529,60 @@ class Engine:
                 required = set.intersection(*({self._guard_sig(g) for g in t["guards"]} for t in incoming)) if incoming else set()
                 own = {self._guard_sig(g) for g in c["guards"]}
                 missing = [g for g in guarded[0]["guards"] if self._guard_sig(g) in required - own]
+                p = {"action": c["action"], "entity": name, "state": self.sname(c["to_state_id"])}
                 if missing:
-                    via = ", ".join(f"«{t['action']}»" for t in incoming)
-                    add("warning", "nascita", f"«{c['action']}» crea {name} in {self.sname(c['to_state_id'])} saltando dei controlli",
-                        f"Chi arriva in {self.sname(c['to_state_id'])} tramite {via} deve soddisfare: "
-                        + "; ".join(self._guard_text(g) for g in missing)
-                        + ". Questa creazione no: è voluto?",
+                    add("warning", "birth", "a.birth_skips",
+                        params={**p, "via": ", ".join(q(t["action"]) for t in incoming),
+                                "guards": "; ".join(self._guard_text(g) for g in missing)},
                         entity_id=e["id"], transition_id=c["id"])
                 elif not required:
-                    via = ", ".join(f"«{t['action']}»" for t in guarded)
-                    add("info", "nascita", f"«{c['action']}» crea {name} direttamente in {self.sname(c['to_state_id'])}",
-                        f"Alcune strade normali per arrivarci hanno controlli ({via}): verifica che la creazione diretta ne sia esente.",
+                    add("info", "birth", "a.birth_direct", params={**p, "via": ", ".join(q(t["action"]) for t in guarded)},
                         entity_id=e["id"], transition_id=c["id"])
 
             for t in e["transitions"]:
+                p = {"entity": name, "action": t["action"]}
                 for g in t["guards"]:
                     if g["kind"] == "state" and not g["state_ids"]:
-                        add("error", "guardie", f"{name}: guardia vuota su «{t['action']}»",
-                            "La guardia non elenca stati.", entity_id=e["id"], transition_id=t["id"])
+                        add("error", "guards", "a.empty_guard", params=p, entity_id=e["id"], transition_id=t["id"])
                     if g["kind"] == "state" and g["entity_id"] == e["id"]:
-                        add("info", "guardie", f"{name}: «{t['action']}» ha una guardia sulla propria entità",
-                            "Di solito è già espresso dallo stato di partenza.", entity_id=e["id"], transition_id=t["id"])
+                        add("info", "guards", "a.self_guard", params=p, entity_id=e["id"], transition_id=t["id"])
 
         for inv in self.invariants:
             if not inv["rules"]:
-                add("warning", "invarianti", f"Invariante «{inv['name']}» senza condizioni", invariant_id=inv["id"])
+                add("warning", "invariants", "a.empty_invariant", detail="", params={"name": inv["name"]}, invariant_id=inv["id"])
 
-        issues += relation_issues(self.model, self.sname)
+        issues += relation_issues(self.model, self.sname, T)
 
         # --- analisi dinamica (esplorazione), sul modello con le istanze multiple ---
-        expanded, labels = expand(self.model)
-        dyn = Engine(expanded) if labels else self
+        expanded, labels = expand(self.model, T)
+        dyn = Engine(expanded, T.lang) if labels else self
         ex = dyn.explore(limit=limit)
         for v in ex["violations"]:
-            add("error" if v["severity"] == "error" else "warning", "invarianti",
-                f"Invariante violabile: {v['name']}",
-                v["description"] or "Esiste una sequenza di azioni che porta a una combinazione di stati vietata.",
+            add("error" if v["severity"] == "error" else "warning", "invariants", "a.violable",
+                detail=v["description"] or None, params={"name": v["name"]},
                 invariant_id=v["id"], state=v["state"], trace=v["trace"])
         for c in ex["conflicts"]:
             t = dyn.transition[c["transition_id"]]
-            add("error", "conflitto effetti", f"«{t['action']}» ({dyn.ename(t['entity_id'])}) va in conflitto",
-                c["message"], transition_id=t["id"], entity_id=t["entity_id"], state=c["state"], trace=c["trace"])
+            add("error", "effect_conflict", "a.conflict", detail=c["message"],
+                params={"action": t["action"], "entity": dyn.ename(t["entity_id"])},
+                transition_id=t["id"], entity_id=t["entity_id"], state=c["state"], trace=c["trace"])
         for d in ex["deadlocks"]:
             stuck = [f"{dyn.ename(eid)}.{dyn.sname(sid)}" for eid, sid in d["state"].items()
                      if not dyn.is_final(sid) and sid not in dyn.resting]
-            add("error", "deadlock", "Deadlock: nessuna azione eseguibile",
-                "Entità non concluse: " + ", ".join(stuck), state=d["state"], trace=d["trace"])
+            add("error", "deadlock", "a.deadlock", params={"stuck": ", ".join(stuck)}, state=d["state"], trace=d["trace"])
 
         reached_states = {sid for k in ex["reachable"] for sid in k}
         for e in self.entities:
             for s in e["states"]:
                 if s["id"] not in reached_states and not any(
-                    i.get("state_id") == s["id"] and i["category"] == "raggiungibilità" for i in issues
+                    i.get("state_id") == s["id"] and i["category"] == "reachability" for i in issues
                 ):
-                    add("warning", "raggiungibilità", f"{e['name']}.{s['name']} mai raggiunto nel dominio",
-                        "Le guardie tra entità impediscono di arrivarci partendo dallo stato iniziale.",
+                    add("warning", "reachability", "a.never_reached", params={"entity": e["name"], "state": s["name"]},
                         entity_id=e["id"], state_id=s["id"])
         enabled_base = {dyn.transition[x].get("base_id", x) for x in ex["enabled_ever"]}
         for t in self.transitions:
             if t["entity_id"] in self.order and t["id"] not in enabled_base:
-                add("warning", "azioni morte", f"«{t['action']}» ({self.ename(t['entity_id'])}) mai eseguibile",
-                    "In nessuno stato raggiungibile l'azione è abilitata senza conflitti.",
+                add("warning", "dead_actions", "a.dead_action", params={"action": t["action"], "entity": self.ename(t["entity_id"])},
                     entity_id=t["entity_id"], transition_id=t["id"])
 
         order = {"error": 0, "warning": 1, "info": 2}

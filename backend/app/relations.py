@@ -9,8 +9,11 @@
 import copy
 import re
 
+from .i18n import translator
+
 NONE = 0
-GONE_WORDS = re.compile(r"ELIMIN|CESTIN|CANCELL|ANNULL|STORN|RIMOSS|ARCHIV|DELET", re.I)
+# parole (it/en) che nei nomi degli stati finali indicano "non c'è più"
+GONE_WORDS = re.compile(r"ELIMIN|CESTIN|CANCEL|ANNULL|STORN|RIMOSS|ARCHIV|DELET|REMOV|TRASH|VOID|REVERS|WITHDRAW", re.I)
 
 
 def is_create(t: dict) -> bool:
@@ -28,8 +31,9 @@ def child_gone(r: dict, child: dict) -> list[int]:
     return [NONE] + [s["id"] for s in child["states"] if s["is_final"] and GONE_WORDS.search(s["name"])]
 
 
-def derived_invariants(model: dict) -> list[dict]:
+def derived_invariants(model: dict, t=None) -> list[dict]:
     """Un'invariante per composizione: vietato un figlio vivo mentre il padre è assente."""
+    t = t or translator()
     ent = {e["id"]: e for e in model["entities"]}
     out = []
     for r in compositions(model):
@@ -43,8 +47,8 @@ def derived_invariants(model: dict) -> list[dict]:
             continue
         out.append({
             "id": f"rel{r['id']}", "derived": True, "severity": "error",
-            "name": f"{child['name']} vivo senza {parent['name']}",
-            "description": f"Composizione: {child['name']} non esiste senza {parent['name']}.",
+            "name": t("r.derived.name", child=child["name"], parent=parent["name"]),
+            "description": t("r.derived.desc", child=child["name"], parent=parent["name"]),
             "rules": [{"entity_id": parent["id"], "state_ids": gone, "negate": 0},
                       {"entity_id": child["id"], "state_ids": alive, "negate": 0}],
         })
@@ -57,7 +61,7 @@ def _vid(base_id: int, i: int) -> int:
     return base_id if i == 1 else -(base_id * 10 + i)
 
 
-def expand(model: dict) -> tuple[dict, dict]:
+def expand(model: dict, tr=None) -> tuple[dict, dict]:
     """Duplica i figli delle composizioni con instances > 1.
 
     Ritorna (modello espanso, etichette {id_entità: {"name", "base"}}).
@@ -68,6 +72,7 @@ def expand(model: dict) -> tuple[dict, dict]:
         (si espande istanza per istanza), una condizione di assenza (insieme che include NON_ESISTE)
         vale solo se vale per tutte ("nessun lotto c'è").
     """
+    tr = tr or translator()
     counts = {}
     for r in compositions(model):
         n = max(1, min(3, int(r.get("instances") or 1)))
@@ -128,7 +133,7 @@ def expand(model: dict) -> tuple[dict, dict]:
         return (NONE not in r["state_ids"]) if r.get("negate") else (NONE in r["state_ids"])
 
     invs = []
-    for inv in list(m["invariants"]) + derived_invariants(model):
+    for inv in list(m["invariants"]) + derived_invariants(model, tr):
         multi = {r["entity_id"] for r in inv["rules"] if r["entity_id"] in counts}
         if not multi:
             invs.append(inv)
@@ -145,7 +150,7 @@ def expand(model: dict) -> tuple[dict, dict]:
         n = max((counts[x] for x in presence), default=1)
         for i in range(1, n + 1):
             invs.append({**inv, "id": f"{inv['id']}#{i}" if n > 1 else inv["id"],
-                         "name": f"{inv['name']} (istanza #{i})" if n > 1 else inv["name"],
+                         "name": tr("r.instance_inv", name=inv["name"], i=i) if n > 1 else inv["name"],
                          "rules": [rewrite(r, i) for r in inv["rules"]]})
     m["invariants"] = invs
     m["_derived_done"] = True
@@ -153,7 +158,8 @@ def expand(model: dict) -> tuple[dict, dict]:
 
 
 # ---------------------------------------------------------------- controlli statici
-def relation_issues(model: dict, sname) -> list[dict]:
+def relation_issues(model: dict, sname, t=None) -> list[dict]:
+    t = t or translator()
     ent = {e["id"]: e for e in model["entities"]}
     issues = []
 
@@ -174,46 +180,45 @@ def relation_issues(model: dict, sname) -> list[dict]:
         P, C = parent["name"], child["name"]
         creations = [t for t in child["transitions"] if is_create(t)]
         if not creations:
-            add("warning", "composizione", f"{C} esiste sempre: la composizione con {P} non è verificabile",
-                f"{C} non ha azioni di creazione, quindi per il tool esiste fin dall'inizio. "
-                f"Aggiungi una creazione per poter controllare che non nasca senza {P}.",
-                entity_id=child["id"], relation_id=r["id"])
-        for t in creations:
-            ok = any(requires_parent(g, parent["id"]) for g in t["guards"])
-            if not ok and t.get("cascade_only"):
+            add("warning", "composition", t("r.always_exists.title", child=C, parent=P),
+                t("r.always_exists.detail", child=C, parent=P), entity_id=child["id"], relation_id=r["id"])
+        for c in creations:
+            ok = any(requires_parent(g, parent["id"]) for g in c["guards"])
+            if not ok and c.get("cascade_only"):
                 # nasce solo in cascata: va bene se a innescarla sono soltanto azioni del padre
                 srcs = [x for e in model["entities"] for x in e["transitions"]
                         if any(f["entity_id"] == child["id"] and f.get("kind") == "create" for f in x["effects"])]
                 ok = bool(srcs) and all(x["entity_id"] == parent["id"] for x in srcs)
             if not ok:
-                add("warning", "composizione", f"«{t['action']}» crea {C} senza richiedere {P}",
-                    f"Composizione: {C} non esiste senza {P}, ma questa creazione non ha una guardia che lo garantisca.",
-                    entity_id=child["id"], transition_id=t["id"], relation_id=r["id"])
+                add("warning", "composition", t("r.create_without_parent.title", action=c["action"], child=C, parent=P),
+                    t("r.create_without_parent.detail", child=C, parent=P),
+                    entity_id=child["id"], transition_id=c["id"], relation_id=r["id"])
         gone = set(r.get("parent_gone_states") or [NONE]) - {NONE}
-        for t in parent["transitions"]:
-            if is_create(t) or t["to_state_id"] not in gone:
+        for x in parent["transitions"]:
+            if is_create(x) or x["to_state_id"] not in gone:
                 continue
-            if not any(f["entity_id"] == child["id"] for f in t["effects"]):
-                add("warning", "composizione", f"«{t['action']}» porta {P} in {sname(t['to_state_id'])} senza toccare {C}",
-                    f"In {sname(t['to_state_id'])} i figli non possono restare vivi, ma l'azione non ha effetti su {C}.",
-                    entity_id=parent["id"], transition_id=t["id"], relation_id=r["id"])
+            if not any(f["entity_id"] == child["id"] for f in x["effects"]):
+                st = sname(x["to_state_id"])
+                add("warning", "composition", t("r.parent_leaves.title", action=x["action"], parent=P, state=st, child=C),
+                    t("r.parent_leaves.detail", state=st, child=C),
+                    entity_id=parent["id"], transition_id=x["id"], relation_id=r["id"])
 
     # --- coerenza tra relazioni e regole ---
-    linked = {}  # coppia non ordinata -> True se esiste una regola tra le due entità
+    linked = {}  # coppia non ordinata -> tipo di regola che lega le due entità
     for e in model["entities"]:
-        for t in e["transitions"]:
-            for g in t["guards"]:
+        for x in e["transitions"]:
+            for g in x["guards"]:
                 if g.get("kind") == "state" and g.get("entity_id") and g["entity_id"] != e["id"]:
-                    linked[frozenset((e["id"], g["entity_id"]))] = "guardia"
-            for f in t["effects"]:
+                    linked[frozenset((e["id"], g["entity_id"]))] = "guard"
+            for f in x["effects"]:
                 if f["entity_id"] != e["id"]:
-                    linked[frozenset((e["id"], f["entity_id"]))] = "effetto"
+                    linked[frozenset((e["id"], f["entity_id"]))] = "effect"
     for inv in model["invariants"]:
         ids = {r["entity_id"] for r in inv["rules"]}
         for a in ids:
             for b in ids:
                 if a != b:
-                    linked.setdefault(frozenset((a, b)), "invariante")
+                    linked.setdefault(frozenset((a, b)), "invariant")
 
     related = set()
     for r in model.get("relations", []):
@@ -223,14 +228,13 @@ def relation_issues(model: dict, sname) -> list[dict]:
             continue
         a, b = ent.get(r["source_id"]), ent.get(r["target_id"])
         if a and b and a["states"] and b["states"]:
-            add("info", "relazioni", f"Relazione {a['name']} – {b['name']} senza regole",
-                "Le due entità sono collegate ma nessuna guardia, effetto o invariante le lega. "
-                "Spesso è una regola che esiste nella realtà ma non è ancora scritta.", relation_id=r["id"])
+            add("info", "relations", t("r.no_rules.title", a=a["name"], b=b["name"]), t("r.no_rules.detail"),
+                relation_id=r["id"])
     for pair, how in linked.items():
         if pair in related or len(pair) != 2:
             continue
         a, b = (ent.get(x) for x in pair)
         if a and b:
-            add("info", "relazioni", f"Dipendenza non dichiarata: {a['name']} – {b['name']}",
-                f"C'è almeno un {how} tra le due entità ma nessuna relazione: forse manca nella panoramica.")
+            add("info", "relations", t("r.undeclared.title", a=a["name"], b=b["name"]),
+                t("r.undeclared.detail", how=t(f"link.{how}")))
     return issues

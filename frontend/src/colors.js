@@ -14,17 +14,18 @@ export const PALETTE = {
 export const COLORS = Object.keys(PALETTE)
 export const pal = (c) => PALETTE[c] || PALETTE.indigo
 
-export const KINDS = { aggregate: 'Aggregato', entity: 'Entità', value_object: 'Value object' }
+// le etichette sono nelle traduzioni: kind.*, severity.*, status.*
+export const KINDS = ['aggregate', 'entity', 'value_object']
 
 export const SEVERITY = {
-  error: { label: 'Errore', cls: 'bg-rose-50 text-rose-700 ring-rose-200', dot: 'bg-rose-500' },
-  warning: { label: 'Attenzione', cls: 'bg-amber-50 text-amber-800 ring-amber-200', dot: 'bg-amber-500' },
-  info: { label: 'Info', cls: 'bg-sky-50 text-sky-700 ring-sky-200', dot: 'bg-sky-500' },
+  error: { cls: 'bg-rose-50 text-rose-700 ring-rose-200', dot: 'bg-rose-500' },
+  warning: { cls: 'bg-amber-50 text-amber-800 ring-amber-200', dot: 'bg-amber-500' },
+  info: { cls: 'bg-sky-50 text-sky-700 ring-sky-200', dot: 'bg-sky-500' },
 }
 
 export const STATUS = {
-  enabled: { label: 'Eseguibile', cls: 'bg-emerald-50 text-emerald-700 ring-emerald-200', dot: 'bg-emerald-500' },
-  conflict: { label: 'In conflitto', cls: 'bg-amber-50 text-amber-800 ring-amber-200', dot: 'bg-amber-500' },
-  blocked: { label: 'Bloccata', cls: 'bg-zinc-100 text-zinc-600 ring-zinc-200', dot: 'bg-zinc-400' },
-  unavailable: { label: 'Non dallo stato', cls: 'bg-white text-zinc-400 ring-zinc-200', dot: 'bg-zinc-200' },
+  enabled: { cls: 'bg-emerald-50 text-emerald-700 ring-emerald-200', dot: 'bg-emerald-500' },
+  conflict: { cls: 'bg-amber-50 text-amber-800 ring-amber-200', dot: 'bg-amber-500' },
+  blocked: { cls: 'bg-zinc-100 text-zinc-600 ring-zinc-200', dot: 'bg-zinc-400' },
+  unavailable: { cls: 'bg-white text-zinc-400 ring-zinc-200', dot: 'bg-zinc-200' },
 }

@@ -19,8 +19,8 @@ const e = computed(() => (props.entityId ? entity(props.entityId) : s.value && !
   >
     <template v-if="entityPrefix && e"><span class="opacity-60 font-sans">{{ e.name }}·</span></template>
     <i v-if="s?.virtual" class="fa-regular fa-circle text-[8px]" />
-    {{ s ? s.name : 'qualsiasi' }}
-    <i v-if="s?.is_initial" class="fa-solid fa-play text-[8px] opacity-50" title="iniziale" />
-    <i v-if="s?.is_final" class="fa-solid fa-flag-checkered text-[9px] opacity-50" title="finale" />
+    {{ s ? s.name : $t('state.any') }}
+    <i v-if="s?.is_initial" class="fa-solid fa-play text-[8px] opacity-50" :title="$t('state.initial')" />
+    <i v-if="s?.is_final" class="fa-solid fa-flag-checkered text-[9px] opacity-50" :title="$t('state.final')" />
   </span>
 </template>

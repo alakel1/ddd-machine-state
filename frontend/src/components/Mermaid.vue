@@ -43,7 +43,7 @@ watch(() => props.code, render)
 <template>
   <div>
     <div v-if="html" class="mermaid-host flex justify-center" v-html="html" />
-    <p v-else-if="!error" class="text-sm text-zinc-400 text-center py-10">Nessuno stato da disegnare</p>
+    <p v-else-if="!error" class="text-sm text-zinc-400 text-center py-10">{{ $t('mermaid.empty') }}</p>
     <p v-if="error" class="text-xs text-rose-600 font-mono">{{ error }}</p>
   </div>
 </template>

@@ -1,7 +1,8 @@
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { store, api, entity, ename, sname, toast, statesOf } from '../store'
 import { pal, STATUS } from '../colors'
+import { t, locale } from '../i18n'
 import { stateDiagram } from '../diagrams'
 import PageHeader from '../components/PageHeader.vue'
 import Mermaid from '../components/Mermaid.vue'
@@ -36,7 +37,7 @@ async function reset() {
 async function setState(eid, sid) {
   const prev = { ...state.value }
   state.value = { ...state.value, [eid]: sid }
-  history.value.unshift({ kind: 'manual', label: `${ename(eid)} impostato a ${sname(sid)}`, entity_id: eid, prev })
+  history.value.unshift({ kind: 'manual', label: t('sim.setTo', { entity: ename(eid), state: sname(sid) }), entity_id: eid, prev })
   await evaluate()
 }
 
@@ -77,14 +78,14 @@ async function loadScenario(id) {
   if (!sc) return
   await reset()
   state.value = { ...state.value, ...toNum(sc.state) }
-  history.value = [{ kind: 'manual', label: `Scenario «${sc.name}» caricato`, prev: { ...state.value } }]
+  history.value = [{ kind: 'manual', label: t('sim.scenarioLoaded', { name: sc.name }), prev: { ...state.value } }]
   await evaluate()
 }
 async function saveScenario() {
   await api.post('/scenarios', { ...saving.value, domain_id: m.value.id, state: state.value, history: [] })
   saving.value = null
   await loadScenarios()
-  toast('Scenario salvato')
+  toast(t('sim.scenarioSaved'))
 }
 
 // ---------- vista ----------
@@ -95,9 +96,9 @@ const counts = computed(() => {
   return c
 })
 const FILTERS = [
-  { key: 'available', label: 'Eseguibili', match: ['enabled', 'conflict'] },
-  { key: 'relevant', label: 'Dallo stato attuale', match: ['enabled', 'conflict', 'blocked'] },
-  { key: 'all', label: 'Tutte', match: ['enabled', 'conflict', 'blocked', 'unavailable'] },
+  { key: 'available', match: ['enabled', 'conflict'] },
+  { key: 'relevant', match: ['enabled', 'conflict', 'blocked'] },
+  { key: 'all', match: ['enabled', 'conflict', 'blocked', 'unavailable'] },
 ]
 const grouped = computed(() => {
   const f = FILTERS.find((x) => x.key === filter.value).match
@@ -126,28 +127,29 @@ onMounted(async () => {
       const a = actions.value.find((x) => x.transition_id === step.transition_id)
       if (!a || !(await run(a))) break
     }
-    toast(`Percorso riprodotto: ${trace.length} passi`)
+    toast(t('sim.replayed', trace.length))
   }
 })
+// motivi e conflitti arrivano tradotti dal backend: si rivaluta lo stato corrente
+watch(locale, () => evaluation.value && evaluate())
 </script>
 
 <template>
-  <PageHeader eyebrow="Machine status" title="Simulatore"
-              subtitle="Imposta lo stato di ogni entità (anche combinazioni insolite) e osserva quali azioni restano disponibili, quali sono bloccate e quali producono conflitti.">
+  <PageHeader eyebrow="Machine status" :title="$t('sim.title')" :subtitle="$t('sim.subtitle')">
     <template #actions>
       <select class="input !w-60" @change="(ev) => { loadScenario(ev.target.value); ev.target.value = '' }">
-        <option value="">Carica scenario…</option>
+        <option value="">{{ $t('sim.loadScenario') }}</option>
         <option v-for="s in scenarios" :key="s.id" :value="s.id">{{ s.name }}</option>
       </select>
-      <button class="btn-outline" @click="saving = { name: '', description: '' }"><i class="fa-solid fa-floppy-disk fa-fw text-[14px]" /> Salva</button>
-      <button class="btn-primary" @click="reset"><i class="fa-solid fa-rotate-left fa-fw text-[14px]" /> Reset</button>
+      <button class="btn-outline" @click="saving = { name: '', description: '' }"><i class="fa-solid fa-floppy-disk fa-fw text-[14px]" /> {{ $t('common.save') }}</button>
+      <button class="btn-primary" @click="reset"><i class="fa-solid fa-rotate-left fa-fw text-[14px]" /> {{ $t('sim.reset') }}</button>
     </template>
   </PageHeader>
 
   <div class="p-6 grid gap-6 xl:grid-cols-[300px_minmax(0,1fr)_380px]">
     <!-- STATO CORRENTE -->
     <aside class="space-y-3">
-      <div class="eyebrow px-1">Stato corrente</div>
+      <div class="eyebrow px-1">{{ $t('sim.currentState') }}</div>
       <div v-for="e in ents" :key="e.id" @click="focus = e.id"
            class="card p-4 cursor-pointer transition relative overflow-hidden"
            :class="focus === e.id ? '!ring-2 !ring-indigo-500/70 shadow-md' : 'hover:ring-zinc-300'">
@@ -159,13 +161,13 @@ onMounted(async () => {
         <select :value="state[e.id]" @click.stop @change="(ev) => setState(e.id, Number(ev.target.value))"
                 class="w-full rounded-lg px-2.5 py-1.5 font-mono text-sm font-semibold ring-1 ring-inset focus:outline-none cursor-pointer"
                 :class="pal(e.color).soft">
-          <option v-for="s in statesOf(e)" :key="s.id" :value="s.id">{{ s.virtual ? '— non esiste —' : s.name }}{{ s.is_final ? '  (finale)' : '' }}</option>
+          <option v-for="s in statesOf(e)" :key="s.id" :value="s.id">{{ s.virtual ? $t('sim.notExisting') : s.name }}{{ s.is_final ? `  (${$t('state.final')})` : '' }}</option>
         </select>
         <div class="flex gap-3 mt-2 text-[11px] text-zinc-500">
           <span class="flex items-center gap-1"><span class="size-1.5 rounded-full bg-emerald-500" />{{ actions.filter((a) => a.entity_id === e.id && a.status === 'enabled').length }}</span>
           <span class="flex items-center gap-1"><span class="size-1.5 rounded-full bg-amber-500" />{{ actions.filter((a) => a.entity_id === e.id && a.status === 'conflict').length }}</span>
           <span class="flex items-center gap-1"><span class="size-1.5 rounded-full bg-zinc-400" />{{ actions.filter((a) => a.entity_id === e.id && a.status === 'blocked').length }}</span>
-          <span v-if="entity(e.id).states.find((s) => s.id === state[e.id])?.is_final" class="ml-auto text-zinc-400">concluso</span>
+          <span v-if="entity(e.id).states.find((s) => s.id === state[e.id])?.is_final" class="ml-auto text-zinc-400">{{ $t('sim.concluded') }}</span>
         </div>
       </div>
     </aside>
@@ -178,7 +180,7 @@ onMounted(async () => {
              :class="v.severity === 'error' ? 'bg-rose-50 ring-rose-200 text-rose-900' : 'bg-amber-50 ring-amber-200 text-amber-900'">
           <i class="fa-solid fa-shield-halved fa-fw text-[18px] shrink-0 mt-0.5" />
           <div>
-            <div class="font-semibold text-sm">Invariante violata: {{ v.name }}</div>
+            <div class="font-semibold text-sm">{{ $t('sim.violated', { name: v.name }) }}</div>
             <div class="text-sm opacity-80">{{ v.description }}</div>
           </div>
         </div>
@@ -189,19 +191,19 @@ onMounted(async () => {
           <button v-for="f in FILTERS" :key="f.key" @click="filter = f.key"
                   class="px-3 py-1.5 text-sm rounded-lg transition cursor-pointer"
                   :class="filter === f.key ? 'bg-white shadow-sm text-zinc-900 font-medium' : 'text-zinc-500 hover:text-zinc-800'">
-            {{ f.label }}
+            {{ $t(`sim.filter.${f.key}`) }}
             <span class="ml-1 text-xs tabular-nums text-zinc-400">{{ f.match.reduce((n, s) => n + counts[s], 0) }}</span>
           </button>
         </div>
         <div class="hidden 2xl:flex gap-3 text-xs text-zinc-500 whitespace-nowrap">
-          <span v-for="(s, k) in STATUS" :key="k" class="flex items-center gap-1.5"><span class="size-2 rounded-full" :class="s.dot" />{{ s.label }}</span>
+          <span v-for="(s, k) in STATUS" :key="k" class="flex items-center gap-1.5"><span class="size-2 rounded-full" :class="s.dot" />{{ $t(`status.${k}`) }}</span>
         </div>
       </div>
 
       <div v-if="!grouped.length" class="card p-10 text-center text-sm text-zinc-500">
-        Nessuna azione eseguibile da questa combinazione di stati.
+        {{ $t('sim.noActions') }}
         <span v-if="ents.some((e) => !entity(e.id).states.find((s) => s.id === state[e.id])?.is_final)" class="block mt-1 font-medium text-rose-600">
-          <i class="fa-solid fa-triangle-exclamation" /> Possibile deadlock: alcune entità non sono in uno stato finale.
+          <i class="fa-solid fa-triangle-exclamation" /> {{ $t('sim.possibleDeadlock') }}
         </span>
       </div>
 
@@ -217,20 +219,20 @@ onMounted(async () => {
             <div class="flex items-center gap-2.5 flex-wrap">
               <span class="size-2 rounded-full" :class="STATUS[a.status].dot" />
               <span class="font-semibold text-sm text-zinc-900">{{ a.action }}</span>
-              <span v-if="a.create" class="tag bg-indigo-50 text-indigo-700 ring-indigo-200"><i class="fa-solid fa-seedling" /> creazione</span>
+              <span v-if="a.create" class="tag bg-indigo-50 text-indigo-700 ring-indigo-200"><i class="fa-solid fa-seedling" /> {{ $t('sim.creation') }}</span>
               <span v-if="a.actor" class="tag bg-zinc-50 text-zinc-500 ring-zinc-200"><i class="fa-solid fa-user fa-fw text-[11px]" />{{ a.actor }}</span>
               <span class="flex items-center gap-1.5">
                 <StateChip :id="a.from" size="xs" /><i class="fa-solid fa-arrow-right fa-fw text-[11px] text-zinc-300" /><StateChip :id="a.to" size="xs" />
               </span>
               <div class="flex-1" />
               <span class="flex items-center gap-2 shrink-0 ml-auto">
-              <span class="tag" :class="STATUS[a.status].cls">{{ STATUS[a.status].label }}</span>
+              <span class="tag" :class="STATUS[a.status].cls">{{ $t(`status.${a.status}`) }}</span>
               <button v-if="a.status === 'enabled'" class="btn-accent !py-1 !px-2.5 !text-xs" :disabled="busy" @click="run(a)">
-                <i class="fa-solid fa-play fa-fw text-[11px]" /> Esegui
+                <i class="fa-solid fa-play fa-fw text-[11px]" /> {{ $t('sim.run') }}
               </button>
               <button v-else-if="a.status === 'conflict' || a.status === 'blocked'" class="btn-outline !py-1 !px-2.5 !text-xs" :disabled="busy"
-                      title="Esegui ignorando guardie e conflitti, per esplorare l'edge case" @click="run(a, true)">
-                <i class="fa-solid fa-hand fa-fw text-[11px]" /> Forza
+                      :title="$t('sim.forceTitle')" @click="run(a, true)">
+                <i class="fa-solid fa-hand fa-fw text-[11px]" /> {{ $t('sim.force') }}
               </button>
               </span>
             </div>
@@ -247,14 +249,14 @@ onMounted(async () => {
               <span v-for="(s, i) in a.steps.slice(1)" :key="i" class="tag"
                     :class="s.forced ? 'bg-amber-50 text-amber-800 ring-amber-200' : 'bg-zinc-50 text-zinc-600 ring-zinc-200'">
                 <i class="fa-solid fa-bolt fa-fw text-[11px]" />{{ ename(s.entity_id) }}: {{ sname(s.from) }} → {{ sname(s.to) }}
-                <span v-if="!s.forced" class="text-zinc-400">via «{{ s.action }}»</span>
+                <span v-if="!s.forced" class="text-zinc-400">{{ $t('sim.via', { action: s.action }) }}</span>
               </span>
             </div>
             <div v-if="a.introduces_violations?.length" class="mt-2 ml-4.5 text-xs text-rose-700 flex gap-1.5">
-              <i class="fa-solid fa-shield-halved fa-fw text-[12px] shrink-0" /> Porta a violare: {{ a.introduces_violations.map((v) => v.name).join(', ') }}
+              <i class="fa-solid fa-shield-halved fa-fw text-[12px] shrink-0" /> {{ $t('sim.leadsToViolation', { names: a.introduces_violations.map((v) => v.name).join(', ') }) }}
             </div>
             <div v-if="a.rules?.length && a.status !== 'unavailable'" class="mt-2 ml-4.5 flex flex-wrap gap-1.5">
-              <span v-for="r in a.rules" :key="r" class="tag bg-sky-50 text-sky-700 ring-sky-200"><i class="fa-solid fa-flag fa-fw text-[11px]" />da verificare: {{ r }}</span>
+              <span v-for="r in a.rules" :key="r" class="tag bg-sky-50 text-sky-700 ring-sky-200"><i class="fa-solid fa-flag fa-fw text-[11px]" />{{ $t('sim.toVerify', { rule: r }) }}</span>
             </div>
           </div>
         </div>
@@ -277,10 +279,10 @@ onMounted(async () => {
       <section class="card">
         <div class="flex items-center gap-2 px-5 py-3 border-b border-zinc-100">
           <i class="fa-solid fa-clock-rotate-left fa-fw text-[14px] text-zinc-400" />
-          <span class="text-sm font-semibold">Storico</span>
-          <button class="ml-auto btn-ghost !py-1 !text-xs" :disabled="!history.length" @click="undo(0)"><i class="fa-solid fa-arrow-rotate-left fa-fw text-[12px]" /> Annulla</button>
+          <span class="text-sm font-semibold">{{ $t('sim.history') }}</span>
+          <button class="ml-auto btn-ghost !py-1 !text-xs" :disabled="!history.length" @click="undo(0)"><i class="fa-solid fa-arrow-rotate-left fa-fw text-[12px]" /> {{ $t('sim.undo') }}</button>
         </div>
-        <div v-if="!history.length" class="px-5 py-6 text-xs text-zinc-400 text-center">Le azioni eseguite appariranno qui.</div>
+        <div v-if="!history.length" class="px-5 py-6 text-xs text-zinc-400 text-center">{{ $t('sim.historyEmpty') }}</div>
         <ol class="px-5 py-3 space-y-0">
           <li v-for="(h, i) in history" :key="history.length - i" class="relative pl-6 pb-4 last:pb-1 group">
             <span class="absolute left-[5px] top-2 bottom-0 w-px bg-zinc-200 group-last:hidden" />
@@ -290,8 +292,8 @@ onMounted(async () => {
               <span class="text-sm" :class="h.kind === 'manual' ? 'text-zinc-500 italic' : 'font-medium'">
                 <template v-if="h.kind !== 'manual'">{{ ename(h.entity_id) }} · </template>{{ h.label }}
               </span>
-              <span v-if="h.kind === 'forced'" class="tag bg-amber-50 text-amber-800 ring-amber-200">forzata</span>
-              <button class="ml-auto text-[11px] text-zinc-400 hover:text-indigo-600 opacity-0 group-hover:opacity-100 cursor-pointer" @click="undo(i)">torna qui</button>
+              <span v-if="h.kind === 'forced'" class="tag bg-amber-50 text-amber-800 ring-amber-200">{{ $t('sim.forced') }}</span>
+              <button class="ml-auto text-[11px] text-zinc-400 hover:text-indigo-600 opacity-0 group-hover:opacity-100 cursor-pointer" @click="undo(i)">{{ $t('sim.backHere') }}</button>
             </div>
             <div v-if="h.steps?.length > 1" class="mt-1 space-y-0.5">
               <div v-for="(s, j) in h.steps.slice(1)" :key="j" class="text-[11px] text-zinc-500 flex items-center gap-1">
@@ -306,14 +308,14 @@ onMounted(async () => {
     </aside>
   </div>
 
-  <Modal v-if="saving" title="Salva scenario" @close="saving = null">
+  <Modal v-if="saving" :title="$t('sim.saveScenario')" @close="saving = null">
     <form class="space-y-4" @submit.prevent="saveScenario">
-      <div><label class="label">Nome</label><input v-model="saving.name" class="input" required placeholder="es. Annullo dopo incasso" /></div>
-      <div><label class="label">Note</label><textarea v-model="saving.description" rows="3" class="input" placeholder="Cosa si vuole verificare" /></div>
+      <div><label class="label">{{ $t('common.name') }}</label><input v-model="saving.name" class="input" required :placeholder="$t('sim.scenarioNamePlaceholder')" /></div>
+      <div><label class="label">{{ $t('common.notes') }}</label><textarea v-model="saving.description" rows="3" class="input" :placeholder="$t('sim.scenarioNotesPlaceholder')" /></div>
       <div class="flex flex-wrap gap-1.5">
         <StateChip v-for="e in ents" :key="e.id" :id="state[e.id]" :entity-id="e.id" entity-prefix size="xs" />
       </div>
-      <div class="flex justify-end"><button class="btn-accent" :disabled="!saving.name">Salva</button></div>
+      <div class="flex justify-end"><button class="btn-accent" :disabled="!saving.name">{{ $t('common.save') }}</button></div>
     </form>
   </Modal>
 </template>

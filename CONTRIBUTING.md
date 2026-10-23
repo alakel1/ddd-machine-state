@@ -20,9 +20,18 @@ Both backend and frontend reload automatically on every change. See the [README]
 
 - Keep each pull request focused on one change.
 - Follow the style of the surrounding code.
-- The UI is in Italian: keep new labels and messages consistent with it.
+- No hard-coded UI text: add every new label to both `frontend/src/locales/en.json` and `it.json`, and every new server-side message (analysis, conflicts, export) to both languages in `backend/app/i18n.py`.
 - If you change the engine (`backend/app/engine.py`, `relations.py`), describe in the PR which domain you used to check the analysis results.
 - Every commit must be signed off (see below).
+
+## Translations
+
+The UI is available in English and Italian. To add a language:
+
+1. Copy `frontend/src/locales/en.json` to `<code>.json`, translate it and register it in `frontend/src/i18n.js` (`LOCALES` and `messages`).
+2. Add a `<code>` block with the same keys to `MESSAGES` in `backend/app/i18n.py`.
+
+Keep the `{placeholders}` unchanged, and the `|` separators of plural forms (`"{n} state | {n} states"`).
 
 ## Developer Certificate of Origin (DCO)
 
