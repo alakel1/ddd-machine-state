@@ -1,15 +1,16 @@
 <script setup>
 import { computed, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { store, api, reloadModel, entity, ename, sname, toast, isCreatable } from '../store'
+import { store, api, reloadModel, entity, ename, sname, toast, isCreatable, goneStates, looksGone } from '../store'
 import { pal, KINDS, COLORS, PALETTE } from '../colors'
 import { t } from '../i18n'
-import { stateDiagram } from '../diagrams'
+import { stateDiagram, contextMap, neighborhood } from '../diagrams'
 import PageHeader from '../components/PageHeader.vue'
 import Modal from '../components/Modal.vue'
 import Mermaid from '../components/Mermaid.vue'
 import StateChip from '../components/StateChip.vue'
 import StatePicker from '../components/StatePicker.vue'
+import RelationModal from '../components/RelationModal.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -18,10 +19,23 @@ const m = computed(() => store.model)
 const others = computed(() => m.value.entities.filter((x) => x.id !== e.value?.id))
 const diagram = computed(() => stateDiagram(e.value))
 
+// ---------- tab: dettaglio | mappa delle relazioni (nell'URL, così resta navigando tra le entità) ----------
+const DEPTHS = [1, 2, 3, null] // null = tutti i gradi
+const setQuery = (patch) => router.replace({ query: { ...route.query, ...patch } })
+const tab = computed(() => (route.query.tab === 'map' ? 'map' : 'detail'))
+const depth = computed(() => (route.query.depth === 'all' ? null : Number(route.query.depth) || 1))
+const mapDeps = computed(() => route.query.deps === '1')
+const relMap = computed(() => contextMap(m.value, { focus: e.value.id, depth: depth.value, dependencies: mapDeps.value }))
+const mapCount = computed(() => neighborhood(m.value, e.value.id, depth.value, { dependencies: mapDeps.value }).size)
+function openFromMap(id) {
+  if (id !== e.value.id) router.push({ path: `/d/${m.value.id}/entity/${id}`, query: route.query })
+}
+
 const meta = ref(null)
 const newState = ref('')
 const newAttr = ref('')
 const draft = ref(null)
+const relationDraft = ref(null) // { relation } da modificare, { relation: null } per una nuova
 
 // ---------- entità ----------
 async function saveMeta() {
@@ -43,6 +57,7 @@ async function addState() {
   if (!name) return
   await api.post('/states', {
     entity_id: e.value.id, name, pos: e.value.states.length, is_initial: e.value.states.length ? 0 : 1,
+    is_gone: looksGone(name) ? 1 : 0,
   })
   newState.value = ''
   await reloadModel()
@@ -174,6 +189,23 @@ async function removeTransition(tr) {
   await reloadModel()
 }
 
+// ---------- relazioni ----------
+// tutte le relazioni dell'entità, viste dal suo lato: padre (source) o figlio (target)
+const relations = computed(() =>
+  m.value.relations
+    .filter((r) => r.source_id === e.value.id || r.target_id === e.value.id)
+    .map((r) => {
+      const isSource = r.source_id === e.value.id
+      return { r, isSource, other: entity(isSource ? r.target_id : r.source_id) }
+    }),
+)
+const goneText = (x) => goneStates(x).map(sname).join(', ')
+async function removeRelation(r) {
+  if (!confirm(t('entity.rel.confirmDelete', { a: ename(r.source_id), b: ename(r.target_id) }))) return
+  await api.del(`/relations/${r.id}`)
+  await reloadModel()
+}
+
 // ---------- dipendenze in ingresso ----------
 const incoming = computed(() => {
   const out = []
@@ -219,7 +251,58 @@ const guardText = (g) =>
       </template>
     </PageHeader>
 
-    <div class="p-8 grid gap-6 xl:grid-cols-5">
+    <nav class="px-8 border-b border-zinc-200/70 bg-white/50 flex gap-6">
+      <button v-for="tb in ['detail', 'map']" :key="tb" @click="setQuery({ tab: tb === 'map' ? 'map' : undefined })"
+              class="relative py-3 text-sm transition cursor-pointer"
+              :class="tab === tb ? 'text-zinc-900 font-medium' : 'text-zinc-500 hover:text-zinc-800'">
+        <i class="fa-solid fa-fw text-[13px] mr-1.5 opacity-70" :class="tb === 'map' ? 'fa-diagram-project' : 'fa-list-ul'" />{{ $t(`entity.tabs.${tb}`) }}
+        <span v-if="tab === tb" class="absolute inset-x-0 -bottom-px h-0.5 rounded-full bg-indigo-600" />
+      </button>
+    </nav>
+
+    <!-- MAPPA DELLE RELAZIONI: l'entità al centro, fino a N gradi di separazione -->
+    <div v-if="tab === 'map'" class="p-8">
+      <section class="card overflow-hidden">
+        <div class="flex flex-wrap items-center gap-4 px-6 py-4 border-b border-zinc-100">
+          <div>
+            <h2 class="font-semibold tracking-tight">{{ $t('entity.map.title') }}</h2>
+            <p class="text-xs text-zinc-500">{{ $t('entity.map.hint', { name: e.name }) }}</p>
+          </div>
+          <div class="ml-auto flex flex-wrap items-center gap-5 text-xs text-zinc-500">
+            <div class="flex items-center gap-2">
+              {{ $t('entity.map.degrees') }}
+              <div class="inline-flex rounded-lg bg-zinc-100 p-0.5">
+                <button v-for="d in DEPTHS" :key="String(d)" @click="setQuery({ depth: d == null ? 'all' : d === 1 ? undefined : String(d) })"
+                        class="min-w-9 px-2.5 py-1 rounded-md text-xs transition cursor-pointer"
+                        :class="depth === d ? 'bg-white shadow-sm text-zinc-900 font-medium' : 'text-zinc-500 hover:text-zinc-800'">
+                  {{ d ?? $t('entity.map.all') }}
+                </button>
+              </div>
+            </div>
+            <label class="flex items-center gap-2 cursor-pointer">
+              <input type="checkbox" class="accent-indigo-600" :checked="mapDeps" @change="(ev) => setQuery({ deps: ev.target.checked ? '1' : undefined })" />
+              {{ $t('model.legend.stateDeps') }}
+            </label>
+          </div>
+        </div>
+        <div class="flex flex-wrap items-center gap-4 px-6 py-2.5 border-b border-zinc-100 text-xs text-zinc-500">
+          <span class="flex items-center gap-1.5"><span class="w-5 border-t border-zinc-500" /> {{ $t('model.legend.relation') }}</span>
+          <span class="flex items-center gap-1.5"><span class="w-5 border-t-[2.5px] border-zinc-700" /> {{ $t('model.composition').toLowerCase() }}</span>
+          <template v-if="mapDeps">
+            <span class="flex items-center gap-1.5"><span class="w-5 border-t border-dashed border-zinc-400" /> {{ $t('model.legend.dependsOn') }}</span>
+            <span class="flex items-center gap-1.5"><span class="w-5 border-t-2 border-amber-500" /> {{ $t('model.legend.effect') }}</span>
+          </template>
+          <span class="flex items-center gap-1.5"><span class="size-3 rounded border border-dashed border-zinc-400" /> {{ $t('entity.map.farther') }}</span>
+          <span class="ml-auto">{{ $t('entity.map.count', { n: mapCount, total: m.entities.length }) }}</span>
+        </div>
+        <div class="p-6 bg-[radial-gradient(circle_at_1px_1px,#e4e4e7_1px,transparent_0)] [background-size:18px_18px]">
+          <Mermaid :code="relMap" clickable @entity-click="openFromMap" />
+          <p v-if="mapCount === 1" class="text-center text-sm text-zinc-400 py-6">{{ $t('entity.map.alone', { name: e.name }) }}</p>
+        </div>
+      </section>
+    </div>
+
+    <div v-else class="p-8 grid gap-6 xl:grid-cols-5">
       <div class="xl:col-span-3 space-y-6">
         <!-- STATI -->
         <section class="card">
@@ -229,6 +312,7 @@ const guardText = (g) =>
               <p class="text-xs text-zinc-500">
                 {{ $t('entity.statesHint') }}
                 {{ $t(creatable ? 'entity.statesHintCreatable' : 'entity.statesHintInitial') }}
+                {{ $t('entity.statesHintGone') }}
               </p>
             </div>
           </div>
@@ -249,6 +333,8 @@ const guardText = (g) =>
                       :class="s.is_initial ? 'bg-indigo-600 text-white ring-indigo-600' : 'bg-white text-zinc-400 ring-zinc-200 hover:text-zinc-700'">{{ $t('state.initial') }}</button>
               <button class="tag cursor-pointer transition" @click="patchState(s, { is_final: s.is_final ? 0 : 1 })"
                       :class="s.is_final ? 'bg-zinc-800 text-white ring-zinc-800' : 'bg-white text-zinc-400 ring-zinc-200 hover:text-zinc-700'">{{ $t('state.final') }}</button>
+              <button class="tag cursor-pointer transition" :title="$t('state.goneHint')" @click="patchState(s, { is_gone: s.is_gone ? 0 : 1 })"
+                      :class="s.is_gone ? 'bg-rose-600 text-white ring-rose-600' : 'bg-white text-zinc-400 ring-zinc-200 hover:text-zinc-700'">{{ $t('state.gone') }}</button>
               <button class="icon-btn opacity-0 group-hover:opacity-100 hover:!text-rose-600" @click="removeState(s)"><i class="fa-solid fa-trash-can fa-fw text-[12px]" /></button>
             </div>
           </div>
@@ -258,6 +344,48 @@ const guardText = (g) =>
                    class="flex-1 bg-transparent font-mono text-sm focus:outline-none placeholder:font-sans placeholder:text-zinc-400" />
             <i class="fa-solid fa-arrow-turn-down fa-fw text-[12px] text-zinc-300" />
           </form>
+        </section>
+
+        <!-- RELAZIONI -->
+        <section class="card">
+          <div class="flex items-center justify-between px-6 py-4 border-b border-zinc-100">
+            <div>
+              <h2 class="font-semibold tracking-tight flex items-center gap-2">
+                <i class="fa-solid fa-code-branch fa-fw text-[13px] text-zinc-400" />{{ $t('entity.rel.title') }}
+              </h2>
+              <p class="text-xs text-zinc-500">{{ $t('entity.rel.hint', { name: e.name }) }}</p>
+            </div>
+            <button class="btn-ghost" @click="relationDraft = { relation: null }">
+              <i class="fa-solid fa-plus fa-fw text-[14px]" /> {{ $t('model.relation') }}
+            </button>
+          </div>
+          <div v-if="!relations.length" class="px-6 py-6 text-center text-sm text-zinc-400">{{ $t('entity.rel.empty') }}</div>
+          <div class="divide-y divide-zinc-100">
+            <div v-for="x in relations" :key="x.r.id" class="px-6 py-3 group hover:bg-zinc-50/50 transition">
+              <div class="flex items-center gap-2 flex-wrap text-sm">
+                <span class="tag" :class="x.r.composition ? 'bg-zinc-800 text-white ring-zinc-800' : 'bg-zinc-50 text-zinc-500 ring-zinc-200'">
+                  <i v-if="x.r.composition" class="fa-solid fa-cubes-stacked" />
+                  {{ $t(x.r.composition ? (x.isSource ? 'entity.rel.parentOf' : 'entity.rel.childOf') : (x.isSource ? 'entity.rel.to' : 'entity.rel.from')) }}
+                </span>
+                <span class="size-2 rounded-full" :class="pal(x.other?.color).dot" />
+                <RouterLink :to="`/d/${m.id}/entity/${x.other?.id}`" class="font-medium hover:underline">{{ x.other?.name }}</RouterLink>
+                <span v-if="x.r.label" class="text-zinc-500 italic">{{ x.r.label }}</span>
+                <span class="tag bg-zinc-50 text-zinc-600 ring-zinc-200 font-mono">{{ x.r.cardinality }}</span>
+                <span v-if="x.r.composition && x.r.instances > 1" class="tag bg-indigo-50 text-indigo-700 ring-indigo-200" :title="$t('model.instancesTitle')">
+                  <i class="fa-solid fa-clone" /> {{ $t('model.instanceCount', x.r.instances) }}
+                </span>
+                <div class="flex-1" />
+                <button class="icon-btn opacity-0 group-hover:opacity-100" @click="relationDraft = { relation: x.r }"><i class="fa-solid fa-pen fa-fw text-[12px]" /></button>
+                <button class="icon-btn opacity-0 group-hover:opacity-100 hover:!text-rose-600" @click="removeRelation(x.r)"><i class="fa-solid fa-trash-can fa-fw text-[12px]" /></button>
+              </div>
+              <!-- cosa comporta la composizione, con gli stati "assente" di ciascun lato -->
+              <p v-if="x.r.composition" class="text-xs text-zinc-500 mt-1.5">
+                {{ x.isSource
+                  ? $t('entity.rel.parentRule', { self: e.name, child: x.other?.name, states: goneText(e) })
+                  : $t('entity.rel.childRule', { self: e.name, parent: x.other?.name, states: goneText(x.other) }) }}
+              </p>
+            </div>
+          </div>
         </section>
 
         <!-- AZIONI -->
@@ -545,6 +673,8 @@ const guardText = (g) =>
         <button class="btn-accent" form="tform" :disabled="!draft.action.trim() || !draft.to_state_id">{{ $t('entity.saveAction') }}</button>
       </template>
     </Modal>
+
+    <RelationModal v-if="relationDraft" :relation="relationDraft.relation" :source-id="e.id" @close="relationDraft = null" />
   </div>
   <div v-else class="p-8 text-zinc-400">{{ $t('entity.notFound') }}</div>
 </template>

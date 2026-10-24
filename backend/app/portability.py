@@ -1,6 +1,7 @@
 """Import/export del dominio: JSON (round-trip) e Markdown (specifica funzionale)."""
 from . import db
 from .engine import Engine
+from .relations import legacy_gone_states
 
 
 def import_model(conn, m: dict, default_name: str = "") -> int:
@@ -8,6 +9,9 @@ def import_model(conn, m: dict, default_name: str = "") -> int:
     did = db.insert(conn, "domains", {"name": m.get("name") or default_name,
                                       "description": m.get("description", "")})
     E, S, T = {}, {}, {}
+    # JSON del formato 1: gli stati "assente" erano sulle relazioni, si ricavano da lì
+    has_flags = any("is_gone" in s for e in m["entities"] for s in e.get("states", []))
+    legacy_gone = set() if has_flags else legacy_gone_states(m)
     for i, e in enumerate(m["entities"]):
         E[e["id"]] = db.insert(conn, "entities", {
             "domain_id": did, "name": e["name"], "description": e.get("description", ""),
@@ -19,7 +23,8 @@ def import_model(conn, m: dict, default_name: str = "") -> int:
         for j, s in enumerate(e.get("states", [])):
             S[s["id"]] = db.insert(conn, "states", {
                 "entity_id": E[e["id"]], "name": s["name"], "description": s.get("description", ""),
-                "is_initial": s.get("is_initial", 0), "is_final": s.get("is_final", 0), "pos": s.get("pos", j)})
+                "is_initial": s.get("is_initial", 0), "is_final": s.get("is_final", 0),
+                "is_gone": s.get("is_gone", int(s["id"] in legacy_gone)), "pos": s.get("pos", j)})
     S[0] = 0  # stato implicito "non esiste"
     for e in m["entities"]:
         for t in e.get("transitions", []):
@@ -41,11 +46,14 @@ def import_model(conn, m: dict, default_name: str = "") -> int:
                     "transition_id": T[t["id"]], "entity_id": E[f["entity_id"]], "kind": f.get("kind", "state"), "action": f.get("action", ""), "skip_final": f.get("skip_final", 0),
                     "to_state_id": S.get(f["to_state_id"]) or None, "description": f.get("description", "")})
     for r in m.get("relations", []):
-        db.insert(conn, "relations", {"domain_id": did, "source_id": E[r["source_id"]], "target_id": E[r["target_id"]],
-                                      "cardinality": r.get("cardinality", "1-1"), "label": r.get("label", ""),
-                                      "composition": r.get("composition", 0), "instances": r.get("instances", 1),
-                                      "parent_gone_states": [S[x] for x in r.get("parent_gone_states", [0]) if x in S],
-                                      "child_gone_states": [S[x] for x in r.get("child_gone_states", []) if x in S]})
+        src, dst, card = E[r["source_id"]], E[r["target_id"]], r.get("cardinality", "1-1")
+        if card == "N-1":  # solo 1-1, 1-N, N-N: si legge dal lato "1"
+            card = "1-N"
+            if not r.get("composition"):
+                src, dst = dst, src
+        db.insert(conn, "relations", {"domain_id": did, "source_id": src, "target_id": dst,
+                                      "cardinality": card, "label": r.get("label", ""),
+                                      "composition": r.get("composition", 0), "instances": r.get("instances", 1)})
     for inv in m.get("invariants", []):
         db.insert(conn, "invariants", {
             "domain_id": did, "name": inv["name"], "description": inv.get("description", ""),
@@ -88,7 +96,8 @@ def export_markdown(m: dict, lang: str | None = None) -> str:
         if e["states"]:
             L += [f"### {t('md.states')}", ""]
             for s in e["states"]:
-                tags = (f" `{t('md.initial')}`" if s["is_initial"] else "") + (f" `{t('md.final')}`" if s["is_final"] else "")
+                tags = (f" `{t('md.initial')}`" if s["is_initial"] else "") + (f" `{t('md.final')}`" if s["is_final"] else "") \
+                    + (f" `{t('md.gone')}`" if s.get("is_gone") else "")
                 L.append(f"- **{s['name']}**{tags}" + (f" — {s['description']}" if s["description"] else ""))
             L.append("")
         if e["transitions"]:

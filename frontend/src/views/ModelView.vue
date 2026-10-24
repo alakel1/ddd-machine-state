@@ -1,7 +1,7 @@
 <script setup>
 import { computed, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { store, api, reloadModel, loadDomains, ename, entity, toast, suggestChildGone } from '../store'
+import { store, api, reloadModel, loadDomains, ename } from '../store'
 import { pal, COLORS } from '../colors'
 import { t } from '../i18n'
 import { contextMap } from '../diagrams'
@@ -9,7 +9,7 @@ import PageHeader from '../components/PageHeader.vue'
 import Modal from '../components/Modal.vue'
 import Mermaid from '../components/Mermaid.vue'
 import StateChip from '../components/StateChip.vue'
-import StatePicker from '../components/StatePicker.vue'
+import RelationModal from '../components/RelationModal.vue'
 
 const router = useRouter()
 const m = computed(() => store.model)
@@ -52,30 +52,8 @@ async function addEntity() {
   router.push(`/d/${m.value.id}/entity/${e.id}`)
 }
 
-function newRelation() {
-  return {
-    source_id: m.value.entities[0]?.id, target_id: m.value.entities[1]?.id, cardinality: '1-N', label: '',
-    composition: 0, parent_gone_states: [0], child_gone_states: [], instances: 1,
-  }
-}
 function openRelation(r) {
-  relation.value = r ? JSON.parse(JSON.stringify(r)) : newRelation()
-  if (!relation.value.child_gone_states?.length) relation.value.child_gone_states = suggestChildGone(entity(relation.value.target_id))
-}
-function swapRelation() {
-  const r = relation.value
-  ;[r.source_id, r.target_id] = [r.target_id, r.source_id]
-  r.parent_gone_states = [0]
-  r.child_gone_states = suggestChildGone(entity(r.target_id))
-}
-
-async function saveRelation() {
-  const r = relation.value
-  if (r.id) await api.put(`/relations/${r.id}`, r)
-  else await api.post('/relations', { ...r, domain_id: m.value.id })
-  relation.value = null
-  await reloadModel()
-  toast(t('model.relationSaved'))
+  relation.value = r || {}
 }
 
 async function removeRelation(r) {
@@ -126,7 +104,7 @@ async function removeRelation(r) {
         </div>
       </div>
       <div class="p-6 bg-[radial-gradient(circle_at_1px_1px,#e4e4e7_1px,transparent_0)] [background-size:18px_18px]">
-        <Mermaid :code="diagram" />
+        <Mermaid :code="diagram" clickable @entity-click="(id) => router.push(`/d/${m.id}/entity/${id}`)" />
       </div>
     </section>
 
@@ -198,66 +176,5 @@ async function removeRelation(r) {
     </form>
   </Modal>
 
-  <Modal v-if="relation" wide :title="$t(relation.id ? 'model.editRelation' : 'model.newRelation')" @close="relation = null">
-    <form class="space-y-4" @submit.prevent="saveRelation">
-      <div class="grid grid-cols-[1fr_auto_1fr] items-end gap-3">
-        <div>
-          <label class="label">{{ $t('model.from') }}</label>
-          <select v-model="relation.source_id" class="input" @change="relation.parent_gone_states = [0]">
-            <option v-for="e in m.entities" :key="e.id" :value="e.id">{{ e.name }}</option>
-          </select>
-        </div>
-        <button type="button" class="icon-btn mb-1.5" :title="$t('common.swap')" @click="swapRelation"><i class="fa-solid fa-right-left" /></button>
-        <div>
-          <label class="label">{{ $t('model.to') }}</label>
-          <select v-model="relation.target_id" class="input" @change="relation.child_gone_states = suggestChildGone(entity(relation.target_id))">
-            <option v-for="e in m.entities" :key="e.id" :value="e.id">{{ e.name }}</option>
-          </select>
-        </div>
-      </div>
-      <div class="grid grid-cols-3 gap-3">
-        <div class="col-span-2"><label class="label">{{ $t('model.label') }}</label><input v-model="relation.label" class="input" :placeholder="$t('model.labelPlaceholder')" /></div>
-        <div>
-          <label class="label">{{ $t('model.cardinality') }}</label>
-          <select v-model="relation.cardinality" class="input"><option v-for="c in ['1-1', '1-N', 'N-1', 'N-N']" :key="c">{{ c }}</option></select>
-        </div>
-      </div>
-
-      <div class="rounded-xl ring-1 ring-zinc-200 p-4 space-y-4" :class="relation.composition && 'bg-zinc-50/60'">
-        <label class="flex items-start gap-2.5 cursor-pointer">
-          <input type="checkbox" class="accent-indigo-600 mt-1" :checked="!!relation.composition"
-                 @change="(ev) => (relation.composition = ev.target.checked ? 1 : 0)" />
-          <span>
-            <span class="text-sm font-semibold flex items-center gap-1.5"><i class="fa-solid fa-cubes-stacked" /> {{ $t('model.composition') }}</span>
-            <i18n-t keypath="model.compositionHint" tag="span" class="block text-xs text-zinc-500">
-              <template #child><b>{{ ename(relation.target_id) }}</b></template>
-              <template #parent><b>{{ ename(relation.source_id) }}</b></template>
-            </i18n-t>
-          </span>
-        </label>
-        <template v-if="relation.composition">
-          <div>
-            <label class="label">{{ $t('model.parentGone', { parent: ename(relation.source_id) }) }}</label>
-            <StatePicker v-model="relation.parent_gone_states" :entity-id="relation.source_id" />
-          </div>
-          <div>
-            <label class="label">{{ $t('model.childGone', { child: ename(relation.target_id) }) }} <span class="font-normal">{{ $t('model.childGoneHint') }}</span></label>
-            <StatePicker v-model="relation.child_gone_states" :entity-id="relation.target_id" />
-          </div>
-          <div class="flex items-center gap-3">
-            <label class="label !mb-0">{{ $t('model.instancesLabel', { child: ename(relation.target_id), parent: ename(relation.source_id) }) }}</label>
-            <select v-model.number="relation.instances" class="input !w-20 !py-1.5">
-              <option v-for="n in [1, 2, 3]" :key="n" :value="n">{{ n }}</option>
-            </select>
-          </div>
-          <p v-if="relation.instances > 1" class="text-xs text-amber-700 flex gap-1.5">
-            <i class="fa-solid fa-triangle-exclamation mt-0.5" />
-            {{ $t('model.instancesWarning') }}
-          </p>
-        </template>
-      </div>
-
-      <div class="flex justify-end"><button class="btn-accent">{{ $t('common.save') }}</button></div>
-    </form>
-  </Modal>
+  <RelationModal v-if="relation" :relation="relation.id ? relation : null" @close="relation = null" />
 </template>

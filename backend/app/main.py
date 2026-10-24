@@ -57,7 +57,7 @@ def export_json(domain_id: int, request: Request):
     with db.tx() as conn:
         m = _model_or_404(conn, domain_id, lang_of(request))
         m["scenarios"] = db.rows(conn, "scenarios", "SELECT * FROM scenarios WHERE domain_id=?", (domain_id,))
-        return {"format": "ddd-machine-status", "version": 1, "domain": m}
+        return {"format": "ddd-machine-status", "version": 2, "domain": m}
 
 
 @app.get("/api/domains/{domain_id}/export.md", response_class=PlainTextResponse)

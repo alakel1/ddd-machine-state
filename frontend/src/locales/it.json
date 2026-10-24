@@ -33,7 +33,9 @@
     "none": "NON_ESISTE",
     "any": "qualsiasi",
     "initial": "iniziale",
-    "final": "finale"
+    "final": "finale",
+    "gone": "assente",
+    "goneHint": "In questo stato l'entità non c'è più: per le composizioni conta come se non esistesse. Non usarlo per stati da cui si torna indietro (es. DISABILITATA)."
   },
   "kind": {
     "aggregate": "Aggregato",
@@ -123,11 +125,15 @@
     "label": "Etichetta",
     "labelPlaceholder": "es. contiene",
     "cardinality": "Cardinalità",
-    "parentGone": "{parent} è assente quando è in",
-    "childGone": "{child} non c'è più quando è in",
-    "childGoneHint": "(gli altri stati contano come \"vivo\")",
     "instancesLabel": "Istanze di {child} simulate per ogni {parent}",
-    "instancesWarning": "Vale solo per l'analisi (il simulatore resta a un'istanza). Trova casi come \"un figlio confermato e l'altro eliminato\", ma le combinazioni da esplorare crescono molto: se l'analisi risulta troncata, i risultati sono parziali."
+    "instancesWarning": "Vale solo per l'analisi (il simulatore resta a un'istanza). Trova casi come \"un figlio confermato e l'altro eliminato\", ma le combinazioni da esplorare crescono molto: se l'analisi risulta troncata, i risultati sono parziali.",
+    "goneIn": "{entity} è assente in:",
+    "goneEdit": "modifica nella scheda",
+    "cardinalityHint": {
+      "oneToOne": "Ogni {a} ha un solo {b}.",
+      "oneToMany": "Ogni {a} ha più {b}.",
+      "manyToMany": "Più {a} sono legati a più {b}."
+    }
   },
   "inv": {
     "eyebrow": "Regole del dominio",
@@ -230,7 +236,11 @@
       "reachable": "raggiungibile",
       "violating": "raggiungibile e viola un'invariante",
       "forbidden": "vietata, mai raggiunta"
-    }
+    },
+    "whatHappens": "Cosa succede",
+    "reachedState": "Stato in cui succede",
+    "showMissing": "+ {n} entità che non esiste | + {n} entità che non esistono",
+    "hideMissing": "nascondi quelle che non esistono"
   },
   "entity": {
     "defaultName": "NuovaEntità",
@@ -325,6 +335,32 @@
       "skipFinalHint": "Se l'entità è già in uno stato finale (es. CONFERMATA), l'effetto la lascia com'è invece di segnalare un conflitto. Utile nelle relazioni 1-N: l'effetto tocca solo le istanze ancora attive e salta quelle già chiuse."
     },
     "saveAction": "Salva azione",
-    "actionSaved": "Azione salvata"
+    "actionSaved": "Azione salvata",
+    "statesHintGone": "«Assente» indica gli stati in cui l'entità non c'è più, come ELIMINATA.",
+    "rel": {
+      "title": "Relazioni",
+      "hint": "Come {name} è legata alle altre entità. Nelle composizioni, «assente» segue i tag sugli stati.",
+      "empty": "Nessuna relazione.",
+      "parentOf": "padre di",
+      "childOf": "figlio di",
+      "to": "verso",
+      "from": "da",
+      "confirmDelete": "Eliminare la relazione {a} → {b}?",
+      "parentRule": "Quando {self} è assente ({states}), {child} non può restare vivo.",
+      "childRule": "{self} nasce solo se c'è {parent}, e non può restare vivo quando {parent} è assente ({states})."
+    },
+    "tabs": {
+      "detail": "Dettaglio",
+      "map": "Mappa delle relazioni"
+    },
+    "map": {
+      "title": "Mappa delle relazioni",
+      "hint": "{name} al centro, con le entità collegate. Clicca un'entità per aprirne la scheda.",
+      "degrees": "Gradi di separazione",
+      "all": "Tutti",
+      "farther": "oltre il primo grado",
+      "count": "{n} di {total} entità",
+      "alone": "{name} non ha relazioni con altre entità."
+    }
   }
 }

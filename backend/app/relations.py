@@ -2,7 +2,8 @@
 
 - Composizione: una relazione source → target con composition=1 dice che il figlio (target)
   non esiste senza il padre (source). Ne derivano un'invariante ("figlio vivo con padre assente")
-  e dei controlli statici su creazioni ed eliminazioni.
+  e dei controlli statici su creazioni ed eliminazioni. "Assente" vale per entrambi i lati allo
+  stesso modo: NON_ESISTE oppure uno stato marcato is_gone nella scheda dell'entità.
 - Istanze multiple: sulla composizione si può chiedere di simulare 2-3 figli per padre.
   `expand` duplica l'entità figlia nel modello usato dall'analisi; il simulatore resta a un'istanza.
 """
@@ -24,11 +25,31 @@ def compositions(model: dict) -> list[dict]:
     return [r for r in model.get("relations", []) if r.get("composition")]
 
 
-def child_gone(r: dict, child: dict) -> list[int]:
-    """Stati in cui il figlio "non c'è più": scelti sulla relazione, oppure proposti dai nomi degli stati finali."""
-    if r.get("child_gone_states"):
-        return list(r["child_gone_states"])
-    return [NONE] + [s["id"] for s in child["states"] if s["is_final"] and GONE_WORDS.search(s["name"])]
+def gone_states(e: dict) -> list[int]:
+    """Stati in cui l'entità "non c'è più": NON_ESISTE più quelli marcati nella sua scheda."""
+    return [NONE] + [s["id"] for s in e["states"] if s.get("is_gone")]
+
+
+def looks_gone(state: dict) -> bool:
+    """Proposta dal nome: uno stato finale come ELIMINATA o DELETED di solito vuol dire "non c'è più"."""
+    return bool(state.get("is_final")) and bool(GONE_WORDS.search(state["name"]))
+
+
+def legacy_gone_states(model: dict) -> set[int]:
+    """Formato precedente, con gli stati "assente" scelti su ogni relazione: unione per entità.
+
+    Serve alla migrazione del database e all'import di JSON vecchi.
+    """
+    ent = {e["id"]: e for e in model["entities"]}
+    out = set()
+    for r in compositions(model):
+        out |= set(r.get("parent_gone_states") or [NONE])
+        child = ent.get(r["target_id"])
+        if r.get("child_gone_states"):
+            out |= set(r["child_gone_states"])
+        elif child:
+            out |= {s["id"] for s in child["states"] if looks_gone(s)}
+    return out - {NONE}
 
 
 def derived_invariants(model: dict, t=None) -> list[dict]:
@@ -40,9 +61,9 @@ def derived_invariants(model: dict, t=None) -> list[dict]:
         parent, child = ent.get(r["source_id"]), ent.get(r["target_id"])
         if not parent or not child or not child["states"]:
             continue
-        dead = set(child_gone(r, child))
+        dead = set(gone_states(child))
         alive = [s["id"] for s in child["states"] if s["id"] not in dead]
-        gone = r.get("parent_gone_states") or [NONE]
+        gone = gone_states(parent)
         if not alive:
             continue
         out.append({
@@ -193,7 +214,7 @@ def relation_issues(model: dict, sname, t=None) -> list[dict]:
                 add("warning", "composition", t("r.create_without_parent.title", action=c["action"], child=C, parent=P),
                     t("r.create_without_parent.detail", child=C, parent=P),
                     entity_id=child["id"], transition_id=c["id"], relation_id=r["id"])
-        gone = set(r.get("parent_gone_states") or [NONE]) - {NONE}
+        gone = set(gone_states(parent)) - {NONE}
         for x in parent["transitions"]:
             if is_create(x) or x["to_state_id"] not in gone:
                 continue

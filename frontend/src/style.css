@@ -25,9 +25,11 @@
              focus:outline-none focus:ring-2 focus:ring-indigo-500/60 transition; }
 @utility label { @apply block text-xs font-medium text-zinc-500 mb-1.5; }
 @utility eyebrow { @apply text-[11px] font-semibold uppercase tracking-[0.08em] text-zinc-400; }
-@utility tag { @apply inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] font-medium ring-1 ring-inset; }
+@utility tag { @apply inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] font-medium ring-1 ring-inset whitespace-nowrap; }
 
 .mermaid-host svg { max-width: 100%; height: auto; }
+.mermaid-host.clickable-nodes .node { cursor: pointer; }
+.mermaid-host.clickable-nodes .node:hover { filter: brightness(0.96); }
 .mermaid-host .edgeLabel, .mermaid-host .edgeLabel p { background: #fff !important; font-size: 11px; color: #52525b; }
 
 .fade-enter-active, .fade-leave-active { transition: opacity .15s ease, transform .15s ease; }

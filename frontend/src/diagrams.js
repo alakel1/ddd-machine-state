@@ -37,33 +37,9 @@ export function stateDiagram(entity, { current = null, highlight = [], direction
   return L.join('\n')
 }
 
-/** Context map: entità raggruppate per bounded context, relazioni e dipendenze di stato. */
-export function contextMap(model, { dependencies = true } = {}) {
-  if (!model?.entities?.length) return ''
-  const L = ['flowchart LR']
-  const groups = {}
-  for (const e of model.entities) (groups[e.context || '—'] ||= []).push(e)
-  Object.entries(groups).forEach(([ctx, ents], i) => {
-    L.push(`  subgraph ctx${i}["${q(ctx)}"]`)
-    for (const e of ents) {
-      const icon = { aggregate: 'fa:fa-cubes', entity: 'fa:fa-cube', value_object: 'fa:fa-gem' }[e.kind]
-      const kind = icon ? `${icon} ${t(`kind.${e.kind}`).toLowerCase()}` : ''
-      L.push(`    e${e.id}["<b>${q(e.name)}</b><br/><small>${kind} · ${t('diagram.states', e.states.length)}</small>"]`)
-    }
-    L.push('  end')
-  })
-  let idx = 0
-  const linkStyles = []
-  for (const r of model.relations) {
-    if (r.composition) {
-      // composizione: il figlio non esiste senza il padre
-      L.push(`  e${r.source_id} -- "fa:fa-cubes-stacked ${q(r.label) || q(t('diagram.contains'))} ${q(r.cardinality)}" --o e${r.target_id}`)
-      linkStyles.push(`  linkStyle ${idx} stroke:#3f3f46,stroke-width:2.5px`)
-    } else {
-      L.push(`  e${r.source_id} -- "${q(r.label)} ${q(r.cardinality)}" --> e${r.target_id}`)
-    }
-    idx++
-  }
+/** Archi della context map: relazioni e, se richieste, dipendenze di stato (guardie ed effetti tra entità). */
+function mapEdges(model, dependencies) {
+  const edges = model.relations.map((r) => ({ kind: r.composition ? 'composition' : 'relation', from: r.source_id, to: r.target_id, r }))
   if (dependencies) {
     const seen = new Set()
     for (const e of model.entities)
@@ -71,20 +47,91 @@ export function contextMap(model, { dependencies = true } = {}) {
         for (const g of tr.guards)
           if (g.kind === 'state' && g.entity_id && g.entity_id !== e.id && !seen.has(`g${e.id}-${g.entity_id}`)) {
             seen.add(`g${e.id}-${g.entity_id}`)
-            L.push(`  e${e.id} -. "${q(t('diagram.dependsOn'))}" .-> e${g.entity_id}`)
-            linkStyles.push(`  linkStyle ${idx++} stroke:#a1a1aa,stroke-width:1px`)
+            edges.push({ kind: 'guard', from: e.id, to: g.entity_id })
           }
         for (const f of tr.effects)
           if (f.entity_id !== e.id && !seen.has(`f${e.id}-${f.entity_id}`)) {
             seen.add(`f${e.id}-${f.entity_id}`)
-            L.push(`  e${e.id} == "fa:fa-bolt ${q(t('diagram.effect'))}" ==> e${f.entity_id}`)
-            linkStyles.push(`  linkStyle ${idx++} stroke:#f59e0b,stroke-width:2px`)
+            edges.push({ kind: 'effect', from: e.id, to: f.entity_id })
           }
       }
   }
-  for (const e of model.entities) {
+  return edges
+}
+
+/** Distanza (in gradi di separazione) di ogni entità raggiungibile da focus, entro depth (null = senza limite). */
+export function neighborhood(model, focus, depth = null, { dependencies = false } = {}) {
+  const adj = {}
+  for (const x of mapEdges(model, dependencies)) {
+    ;(adj[x.from] ||= new Set()).add(x.to)
+    ;(adj[x.to] ||= new Set()).add(x.from)
+  }
+  const dist = new Map([[focus, 0]])
+  let frontier = [focus]
+  for (let d = 1; frontier.length && (depth == null || d <= depth); d++) {
+    const next = []
+    for (const id of frontier)
+      for (const n of adj[id] || [])
+        if (!dist.has(n)) {
+          dist.set(n, d)
+          next.push(n)
+        }
+    frontier = next
+  }
+  return dist
+}
+
+/**
+ * Context map: entità, relazioni e dipendenze di stato.
+ * Senza focus: tutte le entità raggruppate per bounded context.
+ * Con focus: solo le entità entro depth gradi di separazione, con focus evidenziata al centro.
+ */
+export function contextMap(model, { dependencies = true, focus = null, depth = null } = {}) {
+  if (!model?.entities?.length) return ''
+  const dist = focus != null ? neighborhood(model, focus, depth, { dependencies }) : null
+  const shown = model.entities.filter((e) => !dist || dist.has(e.id))
+  const edges = mapEdges(model, dependencies).filter((x) => !dist || (dist.has(x.from) && dist.has(x.to)))
+  const L = ['flowchart LR']
+  const node = (e, indent) => {
+    const icon = { aggregate: 'fa:fa-cubes', entity: 'fa:fa-cube', value_object: 'fa:fa-gem' }[e.kind]
+    const kind = icon ? `${icon} ${t(`kind.${e.kind}`).toLowerCase()}` : ''
+    // nella vista centrata non ci sono i riquadri dei contesti: il contesto va nell'etichetta
+    const ctx = dist && e.context ? `${q(e.context)}<br/>` : ''
+    L.push(`${indent}e${e.id}["<b>${q(e.name)}</b><br/><small>${ctx}${kind} · ${t('diagram.states', e.states.length)}</small>"]`)
+  }
+  const groups = {}
+  if (dist) shown.forEach((e) => node(e, '  '))
+  else {
+    for (const e of shown) (groups[e.context || '—'] ||= []).push(e)
+    Object.entries(groups).forEach(([ctx, ents], i) => {
+      L.push(`  subgraph ctx${i}["${q(ctx)}"]`)
+      ents.forEach((e) => node(e, '    '))
+      L.push('  end')
+    })
+  }
+  const linkStyles = []
+  edges.forEach((x, idx) => {
+    if (x.kind === 'composition') {
+      // composizione: il figlio non esiste senza il padre
+      L.push(`  e${x.from} -- "fa:fa-cubes-stacked ${q(x.r.label) || q(t('diagram.contains'))} ${q(x.r.cardinality)}" --o e${x.to}`)
+      linkStyles.push(`  linkStyle ${idx} stroke:#3f3f46,stroke-width:2.5px`)
+    } else if (x.kind === 'relation') {
+      L.push(`  e${x.from} -- "${q(x.r.label)} ${q(x.r.cardinality)}" --> e${x.to}`)
+    } else if (x.kind === 'guard') {
+      L.push(`  e${x.from} -. "${q(t('diagram.dependsOn'))}" .-> e${x.to}`)
+      linkStyles.push(`  linkStyle ${idx} stroke:#a1a1aa,stroke-width:1px`)
+    } else {
+      L.push(`  e${x.from} == "fa:fa-bolt ${q(t('diagram.effect'))}" ==> e${x.to}`)
+      linkStyles.push(`  linkStyle ${idx} stroke:#f59e0b,stroke-width:2px`)
+    }
+  })
+  for (const e of shown) {
     const c = pal(e.color)
-    L.push(`  style e${e.id} fill:${c.bg},stroke:${c.hex},stroke-width:1.5px,color:#18181b`)
+    const d = dist?.get(e.id)
+    if (d === 0) L.push(`  style e${e.id} fill:${c.hex},stroke:${c.hex},stroke-width:3px,color:#ffffff`)
+    // oltre il primo grado: bordo tratteggiato e sfondo bianco, per far risaltare i vicini diretti
+    else if (d > 1) L.push(`  style e${e.id} fill:#ffffff,stroke:${c.hex},stroke-width:1.5px,stroke-dasharray:4 3,color:#3f3f46`)
+    else L.push(`  style e${e.id} fill:${c.bg},stroke:${c.hex},stroke-width:1.5px,color:#18181b`)
   }
   Object.keys(groups).forEach((_, i) => L.push(`  style ctx${i} fill:#fafafa,stroke:#e4e4e7,color:#71717a`))
   return [...L, ...linkStyles].join('\n')

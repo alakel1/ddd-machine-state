@@ -2,7 +2,9 @@
 import { ref, watch, onMounted } from 'vue'
 import mermaid from 'mermaid'
 
-const props = defineProps({ code: String })
+const props = defineProps({ code: String, clickable: Boolean })
+// entity-click: clic su un nodo "e<id>" delle mappe delle entità
+const emit = defineEmits(['entity-click'])
 const html = ref('')
 const error = ref('')
 let seq = 0
@@ -36,13 +38,19 @@ async function render() {
     error.value = String(e.message || e)
   }
 }
+function onClick(ev) {
+  const node = ev.target.closest?.('.node')
+  const m = node?.id.match(/flowchart-e(-?\d+)-/)
+  if (m && props.clickable) emit('entity-click', Number(m[1]))
+}
+
 onMounted(render)
 watch(() => props.code, render)
 </script>
 
 <template>
   <div>
-    <div v-if="html" class="mermaid-host flex justify-center" v-html="html" />
+    <div v-if="html" class="mermaid-host flex justify-center" :class="clickable && 'clickable-nodes'" v-html="html" @click="onClick" />
     <p v-else-if="!error" class="text-sm text-zinc-400 text-center py-10">{{ $t('mermaid.empty') }}</p>
     <p v-if="error" class="text-xs text-rose-600 font-mono">{{ error }}</p>
   </div>

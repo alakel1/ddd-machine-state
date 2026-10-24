@@ -163,8 +163,16 @@ class Engine:
     def rule_notes(self, t: dict) -> list[str]:
         return [g["description"] for g in t["guards"] if g["kind"] == "rule" and g["description"]]
 
+    def _conflict(self, t: dict, what: str, eid, depth: int, reason: str, details=()) -> dict:
+        """Conflitto strutturato: quale effetto di t (what) non riesce e perché (reason, details = guardie che bloccano)."""
+        effect = self.t("effect.label", action=t["action"], what=what)
+        details = list(details)
+        message = self.t("effect.conflict", effect=effect, reason=reason) + (f" — {'; '.join(details)}" if details else "")
+        return {"message": message, "trigger_id": t["id"], "entity_id": eid, "depth": depth + 1,
+                "what": what, "reason": reason, "details": details}
+
     def fire(self, t: dict, state: dict, depth: int = 0, chain: frozenset = frozenset()):
-        """Esegue t e propaga gli effetti. Ritorna (nuovo_stato, passi, conflitti)."""
+        """Esegue t e propaga gli effetti. Ritorna (nuovo_stato, passi, conflitti); i conflitti sono dict (vedi _conflict)."""
         new = dict(state)
         steps = [{
             "transition_id": t["id"], "entity_id": t["entity_id"], "action": t["action"],
@@ -193,7 +201,7 @@ class Engine:
                 continue
             if cur == target:
                 continue
-            label = self.t("effect.label_state", action=t["action"], entity=self.ename(eid), src=self.sname(cur), dst=self.sname(target))
+            what = self.t("effect.what_state", entity=self.ename(eid), src=self.sname(cur), dst=self.sname(target))
             cands = [c for c in self.outgoing(eid, cur) if c["to_state_id"] == target]
             if not cands and cur == NONE:
                 # l'entità non esiste e non c'è un modo di crearla in quello stato:
@@ -201,11 +209,12 @@ class Engine:
                 steps.append({"transition_id": None, "entity_id": eid, "action": self.t("step.missing"),
                               "from": cur, "to": cur, "depth": depth + 1, "skipped": True})
                 continue
+            forced = {"transition_id": None, "entity_id": eid, "action": self.t("step.forced"),
+                      "from": cur, "to": target, "depth": depth + 1, "forced": True}
             if not cands:
-                conflicts.append(self.t("effect.no_transition", label=label, src=self.sname(cur), dst=self.sname(target)))
+                conflicts.append(self._conflict(t, what, eid, depth, self.t("effect.no_transition", src=self.sname(cur), dst=self.sname(target))))
                 new[eid] = target
-                steps.append({"transition_id": None, "entity_id": eid, "action": "(forzato)",
-                              "from": cur, "to": target, "depth": depth + 1, "forced": True})
+                steps.append(forced)
                 continue
             chosen, why = None, []
             for c in cands:
@@ -215,13 +224,12 @@ class Engine:
                     break
                 why += f
             if chosen is None:
-                conflicts.append(self.t("effect.blocked", label=label, action=cands[0]["action"], why="; ".join(why)))
+                conflicts.append(self._conflict(t, what, eid, depth, self.t("effect.blocked", action=cands[0]["action"]), why))
                 new[eid] = target
-                steps.append({"transition_id": None, "entity_id": eid, "action": "(forzato)",
-                              "from": cur, "to": target, "depth": depth + 1, "forced": True})
+                steps.append(forced)
                 continue
             if chosen["id"] in chain or depth >= MAX_CASCADE_DEPTH:
-                conflicts.append(self.t("effect.cycle_on", label=label, action=chosen["action"]))
+                conflicts.append(self._conflict(t, what, eid, depth, self.t("effect.cycle_on", action=chosen["action"])))
                 continue
             new, sub_steps, sub_conf = self.fire(chosen, new, depth + 1, chain)
             steps += sub_steps
@@ -232,7 +240,7 @@ class Engine:
         """Effetto "esegui azione": l'entità esegue l'azione con quel nome disponibile dal suo stato attuale."""
         eid, name = eff["entity_id"], eff.get("action", "").strip()
         cur = state[eid]
-        label = self.t("effect.label_action", action=t["action"], entity=self.ename(eid), name=name)
+        what = self.t("effect.what_action", entity=self.ename(eid), name=name)
         if cur == NONE:
             # nessuna istanza da coinvolgere (es. un regolamento senza modelli): l'effetto non si applica
             return state, [{"transition_id": None, "entity_id": eid, "action": self.t("step.missing_action", action=name),
@@ -243,7 +251,7 @@ class Engine:
             # già nello stato a cui l'azione porta (es. arrivata in cascata da un altro ramo): niente da fare
             return state, [], []
         if not cands:
-            return state, [], [self.t("effect.action_unavailable", label=label, state=self.sname(cur))]
+            return state, [], [self._conflict(t, what, eid, depth, self.t("effect.action_unavailable", state=self.sname(cur)))]
         ok, why = [], []
         for c in cands:
             f = self.guard_failures(c, state)
@@ -252,39 +260,39 @@ class Engine:
             else:
                 ok.append(c)
         if not ok:
-            return state, [], [self.t("effect.action_blocked", label=label, why="; ".join(why))]
+            return state, [], [self._conflict(t, what, eid, depth, self.t("effect.blocked", action=name), why)]
         if len(ok) > 1:
             names = ", ".join(self.sname(c["to_state_id"]) for c in ok)
-            return state, [], [self.t("effect.action_ambiguous", label=label, state=self.sname(cur), targets=names)]
+            return state, [], [self._conflict(t, what, eid, depth, self.t("effect.action_ambiguous", state=self.sname(cur), targets=names))]
         if ok[0]["id"] in chain or depth >= MAX_CASCADE_DEPTH:
-            return state, [], [self.t("effect.cycle", label=label)]
+            return state, [], [self._conflict(t, what, eid, depth, self.t("effect.cycle"))]
         return self.fire(ok[0], state, depth + 1, chain)
 
     def _fire_creation(self, t: dict, eff: dict, state: dict, depth: int, chain: frozenset):
         """Effetto "crea": l'entità nasce tramite l'unica azione di creazione con guardie soddisfatte."""
         eid = eff["entity_id"]
-        label = self.t("effect.label_create", action=t["action"], entity=self.ename(eid))
+        what = self.t("effect.what_create", entity=self.ename(eid))
         if state[eid] != NONE:
             # un'istanza esiste già: con relazioni 1-N ne nascerebbe un'altra, che il simulatore non rappresenta
             return state, [{"transition_id": None, "entity_id": eid, "action": self.t("step.already_exists"),
                              "from": state[eid], "to": state[eid], "depth": depth + 1, "skipped": True}], []
         creations = [c for c in self.entity[eid]["transitions"] if is_create(c)]
         if not creations:
-            return state, [], [self.t("effect.no_creations", label=label)]
+            return state, [], [self._conflict(t, what, eid, depth, self.t("effect.no_creations"))]
         ok, why = [], []
         for c in creations:
             f = self.guard_failures(c, state)
             if f:
-                why.append(self.t("q", x=c["action"]) + ": " + "; ".join(f))
+                why += [f"{self.t('q', x=c['action'])}: {x}" for x in f] if len(creations) > 1 else f
             else:
                 ok.append(c)
         if not ok:
-            return state, [], [self.t("effect.no_creation_possible", label=label, why=" | ".join(why))]
+            return state, [], [self._conflict(t, what, eid, depth, self.t("effect.no_creation_possible"), why)]
         if len(ok) > 1:
             names = ", ".join(f"{self.t('q', x=c['action'])} → {self.sname(c['to_state_id'])}" for c in ok)
-            return state, [], [self.t("effect.creations_ambiguous", label=label, options=names)]
+            return state, [], [self._conflict(t, what, eid, depth, self.t("effect.creations_ambiguous", options=names))]
         if ok[0]["id"] in chain or depth >= MAX_CASCADE_DEPTH:
-            return state, [], [self.t("effect.cycle_on", label=label, action=ok[0]["action"])]
+            return state, [], [self._conflict(t, what, eid, depth, self.t("effect.cycle_on", action=ok[0]["action"]))]
         return self.fire(ok[0], state, depth + 1, chain)
 
     def triggers(self, t: dict) -> list[dict]:
@@ -352,7 +360,7 @@ class Engine:
             actions.append({
                 **base,
                 "status": "conflict" if conflicts else "enabled",
-                "reasons": conflicts,
+                "reasons": [c["message"] for c in conflicts],
                 "result": new,
                 "steps": steps,
                 "introduces_violations": new_viol,
@@ -373,8 +381,8 @@ class Engine:
             return {"ok": False, "error": self.t("apply.guards"), "reasons": fails}
         new, steps, conflicts = self.fire(t, state)
         if conflicts and not force:
-            return {"ok": False, "error": self.t("apply.conflict"), "reasons": conflicts}
-        return {"ok": True, "state": new, "steps": steps, "conflicts": conflicts,
+            return {"ok": False, "error": self.t("apply.conflict"), "reasons": [c["message"] for c in conflicts]}
+        return {"ok": True, "state": new, "steps": steps, "conflicts": [c["message"] for c in conflicts],
                 "forced": bool(force and (fails or conflicts)), "violations": self.violations(new)}
 
     # ---------- esplorazione dello spazio degli stati ----------
@@ -414,7 +422,8 @@ class Engine:
                     new, steps, conf = self.fire(t, st)
                     if conf:
                         for c in conf:
-                            conflicts.setdefault((t["id"], c), {"transition_id": t["id"], "message": c, "key": k})
+                            conflicts.setdefault((t["id"], c["message"]), {"transition_id": t["id"], "message": c["message"],
+                                                                           "key": k, "conflict": c, "steps": steps})
                         continue
                     moves += 1
                     # conta anche le azioni scattate in cascata come effetto
@@ -458,10 +467,20 @@ class Engine:
         return ("state", g["entity_id"], tuple(sorted(g["state_ids"])), bool(g["negate"]))
 
     def _guard_text(self, g: dict) -> str:
+        """Guardia in forma leggibile: "Procedura in CREATA, INDETTA o COMPILATA"."""
         if g["kind"] == "rule":
-            return g["description"]
-        op = "∉" if g["negate"] else "∈"
-        return f"{self.ename(g['entity_id'])} {op} {{{', '.join(self.sname(s) for s in g['state_ids'])}}}"
+            return self.t("q", x=g["description"])
+        names = [self.sname(s) for s in g["state_ids"]]
+        states = names[0] if len(names) == 1 else f"{', '.join(names[:-1])} {self.t('or')} {names[-1]}"
+        return self.t("guard.text_not_in" if g["negate"] else "guard.text_in", entity=self.ename(g["entity_id"]), states=states)
+
+    def _covers(self, own: dict, req: dict) -> bool:
+        """La guardia own è almeno severa quanto req (es. Procedura ∈ {A, B} copre Procedura ∈ {A, B, C})."""
+        if own["kind"] != "state" or req["kind"] != "state" or own["entity_id"] != req["entity_id"] \
+                or bool(own["negate"]) != bool(req["negate"]):
+            return self._guard_sig(own) == self._guard_sig(req)
+        a, b = set(own["state_ids"]), set(req["state_ids"])
+        return a >= b if own["negate"] else a <= b
 
     def analyze(self, limit: int = DEFAULT_EXPLORE_LIMIT) -> dict:
         issues = []
@@ -527,8 +546,8 @@ class Engine:
                 if not guarded:
                     continue
                 required = set.intersection(*({self._guard_sig(g) for g in t["guards"]} for t in incoming)) if incoming else set()
-                own = {self._guard_sig(g) for g in c["guards"]}
-                missing = [g for g in guarded[0]["guards"] if self._guard_sig(g) in required - own]
+                missing = [g for g in guarded[0]["guards"] if self._guard_sig(g) in required
+                           and not any(self._covers(o, g) for o in c["guards"])]
                 p = {"action": c["action"], "entity": name, "state": self.sname(c["to_state_id"])}
                 if missing:
                     add("warning", "birth", "a.birth_skips",
@@ -563,9 +582,12 @@ class Engine:
                 invariant_id=v["id"], state=v["state"], trace=v["trace"])
         for c in ex["conflicts"]:
             t = dyn.transition[c["transition_id"]]
+            # passi davvero eseguiti prima del conflitto (senza quelli forzati o saltati) e il punto in cui si blocca
+            done = [x for x in c["steps"] if not x.get("forced") and not x.get("skipped")]
             add("error", "effect_conflict", "a.conflict", detail=c["message"],
                 params={"action": t["action"], "entity": dyn.ename(t["entity_id"])},
-                transition_id=t["id"], entity_id=t["entity_id"], state=c["state"], trace=c["trace"])
+                transition_id=t["id"], entity_id=t["entity_id"], state=c["state"], trace=c["trace"],
+                conflict=c["conflict"], cascade=done)
         for d in ex["deadlocks"]:
             stuck = [f"{dyn.ename(eid)}.{dyn.sname(sid)}" for eid, sid in d["state"].items()
                      if not dyn.is_final(sid) and sid not in dyn.resting]

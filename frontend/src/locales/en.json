@@ -33,7 +33,9 @@
     "none": "DOES_NOT_EXIST",
     "any": "any",
     "initial": "initial",
-    "final": "final"
+    "final": "final",
+    "gone": "gone",
+    "goneHint": "In this state the entity no longer exists: compositions treat it as if it did not exist. Don't use it for states you can come back from (e.g. DISABLED)."
   },
   "kind": {
     "aggregate": "Aggregate",
@@ -123,11 +125,15 @@
     "label": "Label",
     "labelPlaceholder": "e.g. contains",
     "cardinality": "Cardinality",
-    "parentGone": "{parent} is absent when in",
-    "childGone": "{child} is gone when in",
-    "childGoneHint": "(the other states count as \"alive\")",
     "instancesLabel": "Instances of {child} simulated per {parent}",
-    "instancesWarning": "Applies to the analysis only (the simulator keeps one instance). It finds cases like \"one child confirmed and the other deleted\", but the combinations to explore grow fast: if the analysis is truncated, the results are partial."
+    "instancesWarning": "Applies to the analysis only (the simulator keeps one instance). It finds cases like \"one child confirmed and the other deleted\", but the combinations to explore grow fast: if the analysis is truncated, the results are partial.",
+    "goneIn": "{entity} is gone in:",
+    "goneEdit": "edit in the entity page",
+    "cardinalityHint": {
+      "oneToOne": "Each {a} has a single {b}.",
+      "oneToMany": "Each {a} has several {b}.",
+      "manyToMany": "Several {a} are linked to several {b}."
+    }
   },
   "inv": {
     "eyebrow": "Domain rules",
@@ -230,7 +236,11 @@
       "reachable": "reachable",
       "violating": "reachable and violates an invariant",
       "forbidden": "forbidden, never reached"
-    }
+    },
+    "whatHappens": "What happens",
+    "reachedState": "State where it happens",
+    "showMissing": "+ {n} entity that does not exist | + {n} entities that do not exist",
+    "hideMissing": "hide the ones that do not exist"
   },
   "entity": {
     "defaultName": "NewEntity",
@@ -325,6 +335,32 @@
       "skipFinalHint": "If the entity is already in a final state (e.g. CONFIRMED), the effect leaves it as is instead of reporting a conflict. Useful in 1-N relations: the effect only touches the instances still active and skips those already closed."
     },
     "saveAction": "Save action",
-    "actionSaved": "Action saved"
+    "actionSaved": "Action saved",
+    "statesHintGone": "“Gone” marks the states in which the entity no longer exists, such as DELETED.",
+    "rel": {
+      "title": "Relations",
+      "hint": "How {name} is linked to the other entities. In compositions, “gone” follows the tags on the states.",
+      "empty": "No relations.",
+      "parentOf": "parent of",
+      "childOf": "child of",
+      "to": "to",
+      "from": "from",
+      "confirmDelete": "Delete the relation {a} → {b}?",
+      "parentRule": "When {self} is gone ({states}), {child} cannot stay alive.",
+      "childRule": "{self} is created only if {parent} exists, and cannot stay alive when {parent} is gone ({states})."
+    },
+    "tabs": {
+      "detail": "Details",
+      "map": "Relation map"
+    },
+    "map": {
+      "title": "Relation map",
+      "hint": "{name} at the center, with its connected entities. Click an entity to open its page.",
+      "degrees": "Degrees of separation",
+      "all": "All",
+      "farther": "beyond the first degree",
+      "count": "{n} of {total} entities",
+      "alone": "{name} has no relations with other entities."
+    }
   }
 }

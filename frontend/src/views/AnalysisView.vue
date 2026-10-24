@@ -1,7 +1,7 @@
 <script setup>
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { store, api, entity } from '../store'
+import { store, api, entity, ename, NONE } from '../store'
 import { SEVERITY, pal } from '../colors'
 import { locale } from '../i18n'
 import PageHeader from '../components/PageHeader.vue'
@@ -40,6 +40,10 @@ const replayable = (i) => i.trace.every((s) => s.transition_id > 0 && !(store.in
 const multiInstances = computed(() =>
   Object.entries(res.value?.stats.instances || {}).map(([id, n]) => `${m.value.entities.find((e) => e.id === Number(id))?.name} ×${n}`),
 )
+
+// stato globale: le entità che non esistono sono la maggioranza e nascondono quelle che contano
+const visibleState = (i) => Object.entries(i.state).filter(([, sid]) => i._showAll || sid !== NONE)
+const missingCount = (i) => Object.values(i.state).filter((sid) => sid === NONE).length
 
 function replay(i) {
   store.replay = { trace: i.trace }
@@ -105,7 +109,7 @@ watch(locale, () => { run(); loadMatrix() })
           </div>
           <div v-if="res.stats.truncated" class="text-xs text-amber-700 mt-1.5 flex gap-1.5">
             <i class="fa-solid fa-triangle-exclamation mt-0.5" />
-            <i18n-t keypath="analysis.truncated" tag="span"><template #partial><b>{{ $t('analysis.partial') }}</b></template></i18n-t>
+            <i18n-t scope="global" keypath="analysis.truncated" tag="span"><template #partial><b>{{ $t('analysis.partial') }}</b></template></i18n-t>
           </div>
         </div>
       </div>
@@ -142,12 +146,46 @@ watch(locale, () => { run(); loadMatrix() })
                 <span class="tag bg-zinc-50 text-zinc-500 ring-zinc-200">{{ $t(`analysis.category.${i.category}`) }}</span>
               </div>
               <h3 class="mt-2 font-semibold tracking-tight text-zinc-900">{{ i.title }}</h3>
-              <p v-if="i.detail" class="text-sm text-zinc-600 mt-0.5">{{ i.detail }}</p>
+              <p v-if="i.detail && !i.conflict" class="text-sm text-zinc-600 mt-0.5">{{ i.detail }}</p>
             </div>
             <RouterLink v-if="i.entity_id" :to="`/d/${m.id}/entity/${i.entity_id}`" class="btn-ghost !text-xs shrink-0">{{ $t('analysis.openEntity') }}</RouterLink>
           </div>
-          <div v-if="i.state" class="mt-3 flex flex-wrap gap-1.5">
-            <StateChip v-for="(sid, eid) in i.state" :key="eid" :id="sid" :entity-id="Number(eid)" entity-prefix size="xs" />
+          <!-- conflitto: azione → effetti a cascata → dove si blocca e perché -->
+          <div v-if="i.conflict" class="mt-3 rounded-xl bg-zinc-50/80 ring-1 ring-zinc-200 px-4 py-3">
+            <div class="eyebrow mb-2">{{ $t('analysis.whatHappens') }}</div>
+            <div class="space-y-1.5 text-sm">
+              <div v-for="(s, j) in i.cascade" :key="j" class="flex items-center gap-2 flex-wrap" :style="{ paddingLeft: `${s.depth * 20}px` }">
+                <span v-if="s.depth" class="font-mono text-zinc-300">└</span>
+                <span class="size-1.5 rounded-full" :class="pal(entity(s.entity_id)?.color).dot" />
+                <span class="text-zinc-500">{{ ename(s.entity_id) }}</span>
+                <span class="font-medium text-zinc-800">{{ s.action }}</span>
+                <StateChip :id="s.from" :entity-id="s.entity_id" size="xs" />
+                <i class="fa-solid fa-arrow-right fa-fw text-[10px] text-zinc-300" />
+                <StateChip :id="s.to" :entity-id="s.entity_id" size="xs" />
+              </div>
+              <div :style="{ paddingLeft: `${i.conflict.depth * 20}px` }">
+                <div class="flex items-center gap-2 text-rose-700">
+                  <span class="font-mono text-zinc-300">└</span>
+                  <i class="fa-solid fa-circle-xmark fa-fw text-[13px]" />
+                  <span class="font-medium">{{ i.conflict.what }}</span>
+                </div>
+                <div class="pl-[42px] mt-0.5 text-zinc-700">{{ i.conflict.reason }}</div>
+                <ul v-if="i.conflict.details.length" class="pl-[42px] mt-1 space-y-0.5">
+                  <li v-for="d in i.conflict.details" :key="d" class="flex gap-1.5 text-xs text-zinc-600">
+                    <i class="fa-solid fa-lock fa-fw text-[10px] text-zinc-400 mt-[3px] shrink-0" />{{ d }}
+                  </li>
+                </ul>
+              </div>
+            </div>
+          </div>
+          <div v-if="i.state" class="mt-3">
+            <div class="eyebrow mb-1.5">{{ $t('analysis.reachedState') }}</div>
+            <div class="flex flex-wrap items-center gap-1.5">
+              <StateChip v-for="[eid, sid] in visibleState(i)" :key="eid" :id="sid" :entity-id="Number(eid)" entity-prefix size="xs" />
+              <button v-if="missingCount(i)" class="text-[11px] text-zinc-400 hover:text-indigo-600 cursor-pointer" @click="i._showAll = !i._showAll">
+                {{ i._showAll ? $t('analysis.hideMissing') : $t('analysis.showMissing', missingCount(i)) }}
+              </button>
+            </div>
           </div>
           <div v-if="i.trace" class="mt-3 pt-3 border-t border-zinc-100 flex items-center gap-3">
             <div class="flex-1 min-w-0">

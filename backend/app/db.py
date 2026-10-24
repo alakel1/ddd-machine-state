@@ -4,6 +4,8 @@ import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
 
+from .relations import legacy_gone_states
+
 DB_PATH = Path(os.environ.get("DDD_DB", Path(__file__).resolve().parent.parent / "ddd.sqlite3"))
 
 SCHEMA = """
@@ -43,6 +45,7 @@ CREATE TABLE IF NOT EXISTS states (
     description TEXT NOT NULL DEFAULT '',
     is_initial INTEGER NOT NULL DEFAULT 0,
     is_final INTEGER NOT NULL DEFAULT 0,
+    is_gone INTEGER NOT NULL DEFAULT 0,  -- 1 = in questo stato l'entità "non c'è più" (composizioni)
     pos INTEGER NOT NULL DEFAULT 0
 );
 
@@ -92,12 +95,10 @@ CREATE TABLE IF NOT EXISTS relations (
     domain_id INTEGER NOT NULL REFERENCES domains(id) ON DELETE CASCADE,
     source_id INTEGER NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
     target_id INTEGER NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
-    cardinality TEXT NOT NULL DEFAULT '1-1',
+    cardinality TEXT NOT NULL DEFAULT '1-1',      -- 1-1 | 1-N | N-N (source è sempre il lato "1")
     label TEXT NOT NULL DEFAULT '',
-    -- composizione: target (figlio) non esiste senza source (padre)
+    -- composizione: target (figlio) non esiste senza source (padre); "assente" = NON_ESISTE o uno stato con is_gone
     composition INTEGER NOT NULL DEFAULT 0,
-    parent_gone_states TEXT NOT NULL DEFAULT '[0]',  -- stati del padre in cui i figli non possono restare vivi
-    child_gone_states TEXT NOT NULL DEFAULT '[]',    -- stati in cui il figlio "non c'è più" ([] = proposta automatica)
     instances INTEGER NOT NULL DEFAULT 1            -- figli simulati per padre nell'analisi (1-3)
 );
 
@@ -129,13 +130,12 @@ TABLES = {
     "domains": {"fields": ["name", "description"], "json": []},
     "entities": {"fields": ["domain_id", "name", "description", "kind", "context", "color", "pos"], "json": []},
     "attributes": {"fields": ["entity_id", "name", "type", "required", "description"], "json": []},
-    "states": {"fields": ["entity_id", "name", "description", "is_initial", "is_final", "pos"], "json": []},
+    "states": {"fields": ["entity_id", "name", "description", "is_initial", "is_final", "is_gone", "pos"], "json": []},
     "transitions": {"fields": ["entity_id", "kind", "cascade_only", "from_state_id", "to_state_id", "action", "actor", "description"], "json": []},
     "guards": {"fields": ["transition_id", "kind", "entity_id", "state_ids", "negate", "description"], "json": ["state_ids"]},
     "effects": {"fields": ["transition_id", "entity_id", "kind", "to_state_id", "action", "skip_final", "description"], "json": []},
-    "relations": {"fields": ["domain_id", "source_id", "target_id", "cardinality", "label", "composition",
-                              "parent_gone_states", "child_gone_states", "instances"],
-                  "json": ["parent_gone_states", "child_gone_states"]},
+    "relations": {"fields": ["domain_id", "source_id", "target_id", "cardinality", "label", "composition", "instances"],
+                  "json": []},
     "invariants": {"fields": ["domain_id", "name", "description", "severity", "rules"], "json": ["rules"]},
     "scenarios": {"fields": ["domain_id", "name", "description", "state", "history"], "json": ["state", "history"]},
 }
@@ -170,16 +170,35 @@ def _effects_with_kind(conn):
     conn.execute("DROP TABLE effects_old")
 
 
+def _states_gone(conn):
+    """Gli stati "non c'è più" passano dalle singole relazioni allo stato: si ricavano dalle vecchie colonne."""
+    conn.execute("ALTER TABLE states ADD COLUMN is_gone INTEGER NOT NULL DEFAULT 0")
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(relations)")}
+    if "parent_gone_states" not in cols:
+        return
+    for (did,) in conn.execute("SELECT id FROM domains").fetchall():
+        m = load_model(conn, did)
+        for e in m["entities"]:
+            for s in e["states"]:
+                s["is_gone"] = 0
+        rels = [{**dict(r), "parent_gone_states": json.loads(r["parent_gone_states"] or "[0]"),
+                 "child_gone_states": json.loads(r["child_gone_states"] or "[]")}
+                for r in conn.execute("SELECT * FROM relations WHERE domain_id=?", (did,))]
+        for sid in legacy_gone_states({**m, "relations": rels}):
+            conn.execute("UPDATE states SET is_gone=1 WHERE id=?", (sid,))
+    conn.execute("ALTER TABLE relations DROP COLUMN parent_gone_states")
+    conn.execute("ALTER TABLE relations DROP COLUMN child_gone_states")
+
+
 MIGRATIONS = [
     ("transitions", "kind", "ALTER TABLE transitions ADD COLUMN kind TEXT NOT NULL DEFAULT 'normal'"),
     ("effects", "kind", _effects_with_kind),
     ("effects", "action", "ALTER TABLE effects ADD COLUMN action TEXT NOT NULL DEFAULT ''"),
     ("transitions", "cascade_only", "ALTER TABLE transitions ADD COLUMN cascade_only INTEGER NOT NULL DEFAULT 0"),
     ("relations", "composition", "ALTER TABLE relations ADD COLUMN composition INTEGER NOT NULL DEFAULT 0"),
-    ("relations", "parent_gone_states", "ALTER TABLE relations ADD COLUMN parent_gone_states TEXT NOT NULL DEFAULT '[0]'"),
-    ("relations", "child_gone_states", "ALTER TABLE relations ADD COLUMN child_gone_states TEXT NOT NULL DEFAULT '[]'"),
     ("relations", "instances", "ALTER TABLE relations ADD COLUMN instances INTEGER NOT NULL DEFAULT 1"),
     ("effects", "skip_final", "ALTER TABLE effects ADD COLUMN skip_final INTEGER NOT NULL DEFAULT 0"),
+    ("states", "is_gone", _states_gone),
 ]
 
 
@@ -189,6 +208,10 @@ def init_db():
         for table, col, sql in MIGRATIONS:
             if col not in {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}:
                 sql(conn) if callable(sql) else conn.execute(sql)
+        # solo 1-1, 1-N e N-N: una N-1 è la stessa relazione letta dall'altro lato
+        conn.execute("UPDATE relations SET source_id=target_id, target_id=source_id, cardinality='1-N' "
+                     "WHERE cardinality='N-1' AND composition=0")
+        conn.execute("UPDATE relations SET cardinality='1-N' WHERE cardinality='N-1'")  # composizione: il padre resta padre
 
 
 def row_to_dict(table: str, row: sqlite3.Row) -> dict:
