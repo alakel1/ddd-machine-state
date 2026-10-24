@@ -319,10 +319,10 @@
       "runsAction": "runs the action",
       "created": "is created",
       "runs": "runs “{action}”",
-      "activeOnly": "(active instances only)",
+      "activeOnly": "(skipped if already in a final state)",
       "createHint": "the state is decided by the creation guards",
-      "skipFinal": "skip concluded",
-      "skipFinalHint": "For 1-N relations: the effect applies to every instance still active and ignores those in a final state (e.g. in the trash)"
+      "skipFinal": "skip if already final",
+      "skipFinalHint": "If the entity is already in a final state (e.g. CONFIRMED), the effect leaves it as is instead of reporting a conflict. Useful in 1-N relations: the effect only touches the instances still active and skips those already closed."
     },
     "saveAction": "Save action",
     "actionSaved": "Action saved"

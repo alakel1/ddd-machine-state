@@ -24,6 +24,13 @@ const nav = computed(() => [
   { to: 'analysis', label: t('nav.analysis'), icon: 'magnifying-glass-chart' },
 ])
 
+// entità raggruppate per bounded context, nell'ordine in cui compaiono
+const entityGroups = computed(() => {
+  const g = {}
+  for (const e of store.model?.entities || []) (g[e.context || t('model.noContext')] ||= []).push(e)
+  return Object.entries(g).map(([context, entities]) => ({ context, entities }))
+})
+
 async function addEntity() {
   const e = await api.post('/entities', {
     domain_id: domainId.value, name: t('entity.defaultName'), pos: store.model.entities.length,
@@ -90,16 +97,21 @@ async function addEntity() {
                 <i class="fa-solid fa-plus fa-fw text-[12px]" />
               </button>
             </div>
-            <div class="space-y-0.5">
-              <RouterLink
-                v-for="e in store.model?.entities || []" :key="e.id" :to="`/d/${domainId}/entity/${e.id}`"
-                class="flex items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-sm transition hover:bg-white/5 hover:text-white"
-                active-class="!bg-white/10 !text-white"
-              >
-                <span class="size-2 rounded-full" :class="pal(e.color).dot" />
-                <span class="flex-1 truncate">{{ e.name }}</span>
-                <span class="text-[11px] text-zinc-600 tabular-nums">{{ e.states.length }}</span>
-              </RouterLink>
+            <div class="space-y-3">
+              <div v-for="grp in entityGroups" :key="grp.context">
+                <div class="px-2.5 pb-1 text-[11px] font-medium text-zinc-500 truncate" :title="grp.context">{{ grp.context }}</div>
+                <div class="space-y-0.5">
+                  <RouterLink
+                    v-for="e in grp.entities" :key="e.id" :to="`/d/${domainId}/entity/${e.id}`"
+                    class="flex items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-sm transition hover:bg-white/5 hover:text-white"
+                    active-class="!bg-white/10 !text-white"
+                  >
+                    <span class="size-2 rounded-full" :class="pal(e.color).dot" />
+                    <span class="flex-1 truncate">{{ e.name }}</span>
+                    <span class="text-[11px] text-zinc-600 tabular-nums">{{ e.states.length }}</span>
+                  </RouterLink>
+                </div>
+              </div>
             </div>
           </div>
         </template>

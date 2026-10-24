@@ -319,10 +319,10 @@
       "runsAction": "esegue l'azione",
       "created": "nasce",
       "runs": "esegue «{action}»",
-      "activeOnly": "(solo istanze attive)",
+      "activeOnly": "(ignorato se già in uno stato finale)",
       "createHint": "lo stato lo decidono le guardie di creazione",
-      "skipFinal": "salta concluse",
-      "skipFinalHint": "Per relazioni 1-N: l'effetto vale per tutte le istanze ancora attive e ignora quelle in stato finale (es. nel cestino)"
+      "skipFinal": "ignora se già finale",
+      "skipFinalHint": "Se l'entità è già in uno stato finale (es. CONFERMATA), l'effetto la lascia com'è invece di segnalare un conflitto. Utile nelle relazioni 1-N: l'effetto tocca solo le istanze ancora attive e salta quelle già chiuse."
     },
     "saveAction": "Salva azione",
     "actionSaved": "Azione salvata"
