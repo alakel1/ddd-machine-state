@@ -1,7 +1,7 @@
 <script setup>
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { store, api, reloadModel, mutate, entity, ename, sname, toast, isCreatable, goneStates, offStates } from '../store'
+import { store, api, reloadModel, mutate, entity, ename, sname, stateById, toast, isCreatable, goneStates, offStates } from '../store'
 import { pal, KINDS, COLORS, PALETTE } from '../colors'
 import { t } from '../i18n'
 import { stateDiagram, contextMap, neighborhood } from '../diagrams'
@@ -198,6 +198,48 @@ const incoming = computed(() => {
   return out
 })
 
+// ---------- errori dell'analisi che riguardano questa entità ----------
+const errors = ref([])
+watch(() => [m.value, e.value?.id], async () => {
+  const id = e.value?.id
+  if (!id) return
+  const { issues } = await api.get(`/domains/${m.value.id}/analysis`)
+  if (id === e.value?.id) errors.value = issues.filter((i) => i.severity === 'error' && i.entity_ids.includes(id))
+}, { immediate: true })
+// transizioni mancanti: effetti a cascata di altre entità che qui non trovano una transizione
+const missing = computed(() => errors.value.filter((i) => i.category === 'missing_transition' && i.entity_id === e.value.id))
+const sameGap = (a, b) => a.from === b.from && (a.action ? a.action.toLowerCase() === b.action?.toLowerCase() : a.to === b.to)
+// gli altri errori, una riga per caso: le istanze #1, #2 dello stesso caso si contano insieme
+const otherErrors = computed(() => {
+  const rows = new Map()
+  const plain = (s) => (s || '').replace(/ #\d+/g, '')
+  for (const i of errors.value) {
+    if (i.category === 'missing_transition') continue
+    // conflitto dovuto a una transizione mancante qui: è già nella lista sopra
+    if (i.conflict?.gap && missing.value.some((x) => sameGap(x.gap, i.conflict.gap))) continue
+    const text = i.category === 'deadlock' ? '' : plain(i.conflict ? `${i.conflict.what}: ${i.conflict.reason}` : i.detail)
+    const key = `${i.category}|${plain(i.title)}|${text}`
+    const row = rows.get(key)
+    // la figlia è già in uno stato finale: si sistema sull'effetto del padre, con "ignora se già finale"
+    const skipFinal = !!i.conflict?.gap && !!stateById(i.conflict.gap.from)?.is_final
+    if (row) row.count++
+    else rows.set(key, { key, category: i.category, title: plain(i.title), text, count: 1, fixAt: skipFinal ? i.entity_id : null })
+  }
+  return [...rows.values()]
+})
+const errorCount = computed(() => missing.value.length + otherErrors.value.length)
+function addMissing({ gap, requested_by }) {
+  // nome proposto: quello di un'azione che porta già nello stesso stato, altrimenti quello dell'azione che la richiede
+  const same = evolutions.value.find((tr) => tr.to_state_id === gap.to)
+  openTransition()
+  Object.assign(draft.value, {
+    from_state_id: gap.from,
+    to_state_id: gap.to ?? draft.value.to_state_id,
+    action: gap.action || same?.action || requested_by[0]?.action || '',
+    cascade_only: 1,
+  })
+}
+
 // ---------- matrice stati × azioni ----------
 const actionNames = computed(() => [...new Set(e.value.transitions.map((tr) => tr.action))])
 const matrixRows = computed(() => (creatable.value ? [{ id: 0 }, ...e.value.states] : e.value.states))
@@ -282,6 +324,65 @@ const guardText = (g) =>
 
     <div v-else class="p-8 grid gap-6 xl:grid-cols-5">
       <div class="xl:col-span-3 space-y-6">
+        <!-- ERRORI DELL'ANALISI SU QUESTA ENTITÀ -->
+        <section v-if="errorCount" class="card overflow-hidden ring-1 ring-rose-200">
+          <div class="flex items-center gap-4 px-6 py-4 border-b border-rose-100 bg-rose-50/60">
+            <div class="flex-1">
+              <h2 class="font-semibold tracking-tight flex items-center gap-2 text-rose-900">
+                <i class="fa-solid fa-circle-exclamation fa-fw text-[13px] text-rose-500" />{{ $t('entity.errors.title', errorCount) }}
+              </h2>
+              <p class="text-xs text-rose-800/80">{{ $t('entity.errors.hint') }}</p>
+            </div>
+            <RouterLink :to="{ path: `/d/${m.id}/analysis`, query: { entity: e.id, sev: 'error' } }" class="btn-ghost !text-xs shrink-0">
+              {{ $t('entity.errors.open') }} <i class="fa-solid fa-arrow-right fa-fw text-[11px]" />
+            </RouterLink>
+          </div>
+          <div v-if="missing.length" class="px-6 pt-3 pb-1 text-[11px] font-semibold uppercase tracking-wider text-zinc-400">
+            {{ $t('entity.missing.title', missing.length) }}
+            <span class="normal-case font-normal tracking-normal">· {{ $t('entity.missing.hint') }}</span>
+          </div>
+          <div class="divide-y divide-zinc-100">
+            <div v-for="x in missing" :key="x.title" class="flex items-center gap-3 px-6 py-3">
+              <div class="flex-1 min-w-0 space-y-1.5">
+                <div class="flex items-center gap-2 flex-wrap text-sm">
+                  <StateChip :id="x.gap.from" />
+                  <i class="fa-solid fa-arrow-right text-[11px] text-zinc-300" />
+                  <span v-if="x.gap.action" class="font-medium">{{ x.gap.action }}</span>
+                  <i v-if="x.gap.action && x.gap.to" class="fa-solid fa-arrow-right text-[11px] text-zinc-300" />
+                  <StateChip v-if="x.gap.to" :id="x.gap.to" />
+                </div>
+                <div class="flex items-center gap-1.5 flex-wrap text-xs text-zinc-500">
+                  {{ $t('entity.missing.by') }}
+                  <RouterLink v-for="r in x.requested_by" :key="r.transition_id" :to="`/d/${m.id}/entity/${r.entity_id}`"
+                              class="tag bg-zinc-50 text-zinc-600 ring-zinc-200 hover:ring-zinc-300">
+                    <span class="size-1.5 rounded-full" :class="pal(entity(r.entity_id)?.color).dot" />
+                    {{ ename(r.entity_id) }} · <b class="font-medium text-zinc-800">{{ r.action }}</b>
+                  </RouterLink>
+                </div>
+              </div>
+              <button class="btn-ghost shrink-0" @click="addMissing(x)"><i class="fa-solid fa-plus fa-fw text-[13px]" /> {{ $t('entity.missing.add') }}</button>
+            </div>
+          </div>
+          <div v-if="otherErrors.length" class="divide-y divide-zinc-100" :class="missing.length && 'border-t border-zinc-100'">
+            <div v-for="x in otherErrors" :key="x.key" class="px-6 py-3">
+              <div class="flex items-center gap-2 flex-wrap">
+                <span class="tag bg-zinc-50 text-zinc-500 ring-zinc-200">{{ $t(`analysis.category.${x.category}`) }}</span>
+                <span class="text-sm font-medium text-zinc-900">{{ x.title }}</span>
+                <span v-if="x.count > 1" class="text-xs text-zinc-400 tabular-nums">×{{ x.count }}</span>
+              </div>
+              <p v-if="x.text" class="text-xs text-zinc-500 mt-1">{{ x.text }}</p>
+              <p v-if="x.fixAt" class="text-xs text-indigo-700 mt-1 flex items-center gap-1.5 flex-wrap">
+                <i class="fa-solid fa-wrench fa-fw text-[10px]" />
+                <template v-if="x.fixAt === e.id">{{ $t('entity.errors.fixHere', { flag: $t('entity.effect.skipFinal') }) }}</template>
+                <i18n-t v-else scope="global" keypath="entity.errors.fixAt" tag="span">
+                  <template #entity><RouterLink :to="`/d/${m.id}/entity/${x.fixAt}`" class="font-medium underline">{{ ename(x.fixAt) }}</RouterLink></template>
+                  <template #flag>{{ $t('entity.effect.skipFinal') }}</template>
+                </i18n-t>
+              </p>
+            </div>
+          </div>
+        </section>
+
         <!-- STATI -->
         <section class="card">
           <div class="flex items-center justify-between px-6 py-4 border-b border-zinc-100">

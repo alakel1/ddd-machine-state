@@ -1,6 +1,6 @@
 <script setup>
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { store, api, entity, ename, NONE } from '../store'
 import { SEVERITY, pal } from '../colors'
 import { locale } from '../i18n'
@@ -8,13 +8,17 @@ import PageHeader from '../components/PageHeader.vue'
 import StateChip from '../components/StateChip.vue'
 import Trace from '../components/Trace.vue'
 
+const route = useRoute()
 const router = useRouter()
 const m = computed(() => store.model)
 const ents = computed(() => m.value.entities.filter((e) => e.states.length))
 const res = ref(null)
 const loading = ref(false)
-const sev = ref('all')
-const cat = ref('all')
+// filtri iniziali dall'URL (es. dalla scheda di un'entità: ?entity=12&sev=error)
+const sev = ref(route.query.sev || 'all')
+const cat = ref(route.query.cat || 'all')
+const focus = computed(() => Number(route.query.entity) || null)
+const clearFocus = () => router.replace({ query: { ...route.query, entity: undefined } })
 
 async function run() {
   loading.value = true
@@ -27,11 +31,12 @@ async function run() {
   }
 }
 
-const categories = computed(() => [...new Set((res.value?.issues || []).map((i) => i.category))])
+const scoped = computed(() => (res.value?.issues || []).filter((i) => !focus.value || i.entity_ids.includes(focus.value)))
+const categories = computed(() => [...new Set(scoped.value.map((i) => i.category))])
 const issues = computed(() =>
-  (res.value?.issues || []).filter((i) => (sev.value === 'all' || i.severity === sev.value) && (cat.value === 'all' || i.category === cat.value)),
+  scoped.value.filter((i) => (sev.value === 'all' || i.severity === sev.value) && (cat.value === 'all' || i.category === cat.value)),
 )
-const bySev = (s) => (res.value?.issues || []).filter((i) => i.severity === s).length
+const bySev = (s) => scoped.value.filter((i) => i.severity === s).length
 
 onUnmounted(() => (store.instanceLabels = {}))
 
@@ -125,6 +130,11 @@ watch(locale, () => { run(); loadMatrix() })
       <!-- ISSUE -->
       <section class="space-y-3 min-w-0">
         <div class="flex items-center gap-2 flex-wrap">
+          <button v-if="focus" @click="clearFocus"
+                  class="inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium ring-1 bg-indigo-50 text-indigo-700 ring-indigo-200 hover:ring-indigo-300 transition cursor-pointer">
+            <span class="size-1.5 rounded-full" :class="pal(entity(focus)?.color).dot" />{{ ename(focus) }}
+            <i class="fa-solid fa-xmark text-[10px] opacity-60" />
+          </button>
           <button v-for="c in ['all', ...categories]" :key="c" @click="cat = c"
                   class="rounded-full px-3 py-1 text-xs font-medium ring-1 transition cursor-pointer"
                   :class="cat === c ? 'bg-zinc-900 text-white ring-zinc-900' : 'bg-white text-zinc-600 ring-zinc-200 hover:ring-zinc-300'">

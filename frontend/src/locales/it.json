@@ -236,6 +236,7 @@
       "guards": "guardie",
       "invariants": "invarianti",
       "effect_conflict": "conflitto effetti",
+      "missing_transition": "transizioni mancanti",
       "deadlock": "deadlock",
       "dead_actions": "azioni morte",
       "composition": "composizione",
@@ -358,6 +359,19 @@
     "saveAction": "Salva azione",
     "actionSaved": "Azione salvata",
     "statesHintGone": "Per ogni stato indica se l'entità è attiva, spenta (recuperabile) o eliminata (definitivo).",
+    "errors": {
+      "title": "Un errore su questa entità | {n} errori su questa entità",
+      "hint": "Dall'analisi degli edge case: casi in cui l'entità, o un'azione che la coinvolge, si blocca.",
+      "open": "Vedi nell'analisi",
+      "fixHere": "Si sistema qui: attiva «{flag}» su questo effetto.",
+      "fixAt": "Si sistema su {entity}: attiva «{flag}» sull'effetto."
+    },
+    "missing": {
+      "title": "Manca una transizione | Mancano {n} transizioni",
+      "hint": "effetti a cascata di altre entità che qui non trovano una transizione da eseguire",
+      "by": "Richiesta da",
+      "add": "Aggiungi"
+    },
     "rel": {
       "title": "Relazioni",
       "hint": "Come {name} è legata alle altre entità. Nelle composizioni contano gli stati spenti ed eliminati di ciascun lato.",

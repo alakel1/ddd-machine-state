@@ -276,12 +276,12 @@ def relation_issues(model: dict, sname, t=None) -> list[dict]:
         a, b = ent.get(r["source_id"]), ent.get(r["target_id"])
         if a and b and a["states"] and b["states"]:
             add("info", "relations", t("r.no_rules.title", a=a["name"], b=b["name"]), t("r.no_rules.detail"),
-                relation_id=r["id"])
+                relation_id=r["id"], entity_ids=[a["id"], b["id"]])
     for pair, how in linked.items():
         if pair in related or len(pair) != 2:
             continue
         a, b = (ent.get(x) for x in pair)
         if a and b:
             add("info", "relations", t("r.undeclared.title", a=a["name"], b=b["name"]),
-                t("r.undeclared.detail", how=t(f"link.{how}")))
+                t("r.undeclared.detail", how=t(f"link.{how}")), entity_ids=[a["id"], b["id"]])
     return issues

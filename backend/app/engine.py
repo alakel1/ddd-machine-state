@@ -163,13 +163,14 @@ class Engine:
     def rule_notes(self, t: dict) -> list[str]:
         return [g["description"] for g in t["guards"] if g["kind"] == "rule" and g["description"]]
 
-    def _conflict(self, t: dict, what: str, eid, depth: int, reason: str, details=()) -> dict:
-        """Conflitto strutturato: quale effetto di t (what) non riesce e perché (reason, details = guardie che bloccano)."""
+    def _conflict(self, t: dict, what: str, eid, depth: int, reason: str, details=(), gap=None) -> dict:
+        """Conflitto strutturato: quale effetto di t (what) non riesce e perché (reason, details = guardie che bloccano).
+        gap: la transizione che manca all'entità coinvolta ({"from", "to"} oppure {"from", "action"})."""
         effect = self.t("effect.label", action=t["action"], what=what)
         details = list(details)
         message = self.t("effect.conflict", effect=effect, reason=reason) + (f" — {'; '.join(details)}" if details else "")
         return {"message": message, "trigger_id": t["id"], "entity_id": eid, "depth": depth + 1,
-                "what": what, "reason": reason, "details": details}
+                "what": what, "reason": reason, "details": details, "gap": gap}
 
     def fire(self, t: dict, state: dict, depth: int = 0, chain: frozenset = frozenset()):
         """Esegue t e propaga gli effetti. Ritorna (nuovo_stato, passi, conflitti); i conflitti sono dict (vedi _conflict)."""
@@ -212,7 +213,8 @@ class Engine:
             forced = {"transition_id": None, "entity_id": eid, "action": self.t("step.forced"),
                       "from": cur, "to": target, "depth": depth + 1, "forced": True}
             if not cands:
-                conflicts.append(self._conflict(t, what, eid, depth, self.t("effect.no_transition", src=self.sname(cur), dst=self.sname(target))))
+                conflicts.append(self._conflict(t, what, eid, depth, self.t("effect.no_transition", src=self.sname(cur), dst=self.sname(target)),
+                                                gap={"from": cur, "to": target}))
                 new[eid] = target
                 steps.append(forced)
                 continue
@@ -251,7 +253,8 @@ class Engine:
             # già nello stato a cui l'azione porta (es. arrivata in cascata da un altro ramo): niente da fare
             return state, [], []
         if not cands:
-            return state, [], [self._conflict(t, what, eid, depth, self.t("effect.action_unavailable", state=self.sname(cur)))]
+            return state, [], [self._conflict(t, what, eid, depth, self.t("effect.action_unavailable", state=self.sname(cur)),
+                                              gap={"from": cur, "action": name})]
         ok, why = [], []
         for c in cands:
             f = self.guard_failures(c, state)
@@ -623,18 +626,20 @@ class Engine:
             add("error" if v["severity"] == "error" else "warning", "invariants", "a.violable",
                 detail=v["description"] or None, params={"name": v["name"]},
                 invariant_id=v["id"], state=v["state"], trace=v["trace"])
+        base = lambda eid: labels.get(eid, {}).get("base", eid)  # dalle copie #2, #3 all'entità del modello
         for c in ex["conflicts"]:
             t = dyn.transition[c["transition_id"]]
             # passi davvero eseguiti prima del conflitto (senza quelli forzati o saltati) e il punto in cui si blocca
             done = [x for x in c["steps"] if not x.get("forced") and not x.get("skipped")]
             add("error", "effect_conflict", "a.conflict", detail=c["message"],
                 params={"action": t["action"], "entity": dyn.ename(t["entity_id"])},
-                transition_id=t["id"], entity_id=t["entity_id"], state=c["state"], trace=c["trace"],
-                conflict=c["conflict"], cascade=done)
+                transition_id=t.get("base_id", t["id"]), entity_id=base(t["entity_id"]), state=c["state"], trace=c["trace"],
+                conflict=c["conflict"], cascade=done, entity_ids=[base(t["entity_id"]), base(c["conflict"]["entity_id"])])
+        issues += self._missing_transitions(dyn, ex["conflicts"], labels)
         for d in ex["deadlocks"]:
-            stuck = [f"{dyn.ename(eid)}.{dyn.sname(sid)}" for eid, sid in d["state"].items()
-                     if not dyn.is_final(sid) and sid not in dyn.resting]
-            add("error", "deadlock", "a.deadlock", params={"stuck": ", ".join(stuck)}, state=d["state"], trace=d["trace"])
+            stuck = [eid for eid, sid in d["state"].items() if not dyn.is_final(sid) and sid not in dyn.resting]
+            add("error", "deadlock", "a.deadlock", params={"stuck": ", ".join(f"{dyn.ename(x)}.{dyn.sname(d['state'][x])}" for x in stuck)},
+                state=d["state"], trace=d["trace"], entity_ids=[base(x) for x in stuck])
 
         reached_states = {sid for k in ex["reachable"] for sid in k}
         for e in self.entities:
@@ -651,9 +656,15 @@ class Engine:
                     entity_id=t["entity_id"], transition_id=t["id"])
 
         # il simulatore ha un'istanza per entità: i percorsi che passano dalle copie #2, #3 (id negativi) non si riproducono
+        invariant_entities = {inv["id"]: [r["entity_id"] for r in inv["rules"]] for inv in self.invariants}
+        relation_ends = {r["id"]: [r["source_id"], r["target_id"]] for r in self.model.get("relations", [])}
         for i in issues:
             if i.get("trace") is not None:
                 i["replayable"] = all(s["transition_id"] > 0 for s in i["trace"])
+            # entità a cui la segnalazione si riferisce: la scheda di ciascuna la mostra
+            ids = list(i.get("entity_ids", [])) + ([i["entity_id"]] if i.get("entity_id") is not None else [])
+            ids += invariant_entities.get(i.get("invariant_id"), []) + relation_ends.get(i.get("relation_id"), [])
+            i["entity_ids"] = sorted({base(x) for x in ids if x is not None})
         order = {"error": 0, "warning": 1, "info": 2}
         issues.sort(key=lambda i: order.get(i["severity"], 3))
         return {
@@ -669,6 +680,41 @@ class Engine:
             },
             "labels": {str(k): v for k, v in labels.items()},
         }
+
+    def _missing_transitions(self, dyn: "Engine", conflicts: list, labels: dict) -> list[dict]:
+        """Transizioni che mancano a un'entità perché gli effetti a cascata che la coinvolgono si possano applicare.
+        Una per (entità, stato di partenza, arrivo o azione), con le azioni che la richiedono. Se l'entità è già in uno
+        stato finale non manca nulla: va attivato "ignora se già finale" sull'effetto, che è un problema del padre."""
+        gaps = {}
+        for c in conflicts:
+            gap = c["conflict"].get("gap")
+            if not gap or self.is_final(gap["from"]):
+                continue
+            eid = labels.get(c["conflict"]["entity_id"], {}).get("base", c["conflict"]["entity_id"])
+            key = (eid, gap["from"], gap.get("to"), (gap.get("action") or "").lower())
+            g = gaps.setdefault(key, {"entity_id": eid, **gap, "requested_by": {}})
+            trig = dyn.transition[c["conflict"]["trigger_id"]]
+            tid = trig.get("base_id", trig["id"])
+            g["requested_by"][tid] = {"transition_id": tid, "entity_id": self.transition[tid]["entity_id"],
+                                      "action": trig["action"]}
+        out = []
+        for g in gaps.values():
+            eid, src = g["entity_id"], g["from"]
+            if g.get("action"):
+                # stato d'arrivo suggerito: quello delle altre transizioni con lo stesso nome, se è uno solo
+                targets = {t["to_state_id"] for t in self.entity[eid]["transitions"]
+                           if t["action"].strip().lower() == g["action"].lower()}
+                g["to"] = targets.pop() if len(targets) == 1 else None
+                key, params = "a.missing_action", {"action": g["action"]}
+            else:
+                key, params = "a.missing_transition", {"dst": self.sname(g["to"])}
+            requested = list(g.pop("requested_by").values())
+            params.update(entity=self.ename(eid), src=self.sname(src),
+                          by=", ".join(f"{self.ename(r['entity_id'])} {self.t('q', x=r['action'])}" for r in requested))
+            out.append({"severity": "error", "category": "missing_transition",
+                        "title": self.t(f"{key}.title", **params), "detail": self.t(f"{key}.detail", **params),
+                        "entity_id": eid, "state_id": src, "gap": g, "requested_by": requested})
+        return out
 
     def matrix(self, a: int, b: int, limit: int = DEFAULT_EXPLORE_LIMIT) -> dict:
         """Matrice stati(A) x stati(B): raggiungibilità e violazioni."""
