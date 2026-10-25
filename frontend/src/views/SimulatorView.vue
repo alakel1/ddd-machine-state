@@ -41,25 +41,38 @@ async function setState(eid, sid) {
   await evaluate()
 }
 
+// voce dello storico per un'azione eseguita (r: risposta di apply, o passo del replay)
+const historyEntry = (r, a, prev) => ({
+  kind: r.forced ? 'forced' : 'action', label: a.action, entity_id: a.entity_id, actor: a.actor,
+  steps: r.steps, conflicts: r.conflicts, violations: r.violations, prev,
+})
+
 async function run(a, force = false) {
   busy.value = true
   try {
     const r = await api.post(`/domains/${m.value.id}/apply`, { state: state.value, transition_id: a.transition_id, force })
     if (!r.ok) {
       toast(`${r.error}${r.reasons ? ': ' + r.reasons[0] : ''}`, 'error')
-      return false
+      return
     }
-    history.value.unshift({
-      kind: r.forced ? 'forced' : 'action', label: a.action, entity_id: a.entity_id, actor: a.actor,
-      steps: r.steps, conflicts: r.conflicts, violations: r.violations, prev: { ...state.value },
-    })
-    state.value = toNum(r.state)
+    history.value.unshift(historyEntry(r, a, { ...state.value }))
     focus.value = a.entity_id
-    await evaluate()
-    return true
+    // apply restituisce già le azioni disponibili dal nuovo stato
+    evaluation.value = r.evaluation
+    state.value = toNum(r.state)
   } finally {
     busy.value = false
   }
+}
+
+/** Percorso arrivato dall'analisi: lo riesegue il backend in una sola chiamata. */
+async function replay(trace) {
+  const r = await api.post(`/domains/${m.value.id}/replay`, { trace })
+  history.value = r.history.map((h) => historyEntry(h, h, toNum(h.prev))).reverse()
+  if (r.history.length) focus.value = r.history.at(-1).entity_id
+  evaluation.value = r.evaluation
+  state.value = toNum(r.state)
+  toast(t('sim.replayed', r.history.length))
 }
 
 async function undo(i = 0) {
@@ -123,11 +136,7 @@ onMounted(async () => {
   if (store.replay) {
     const trace = store.replay.trace
     store.replay = null
-    for (const step of trace) {
-      const a = actions.value.find((x) => x.transition_id === step.transition_id)
-      if (!a || !(await run(a))) break
-    }
-    toast(t('sim.replayed', trace.length))
+    await replay(trace)
   }
 })
 // motivi e conflitti arrivano tradotti dal backend: si rivaluta lo stato corrente

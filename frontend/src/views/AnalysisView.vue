@@ -35,8 +35,8 @@ const bySev = (s) => (res.value?.issues || []).filter((i) => i.severity === s).l
 
 onUnmounted(() => (store.instanceLabels = {}))
 
-// il simulatore ha un'istanza per entità: i percorsi che passano da "#2" o "#3" non si possono riprodurre
-const replayable = (i) => i.trace.every((s) => s.transition_id > 0 && !(store.instanceLabels[s.entity_id]?.index > 1))
+// il simulatore ha un'istanza per entità: il backend indica se il percorso passa da "#2" o "#3"
+const replayable = (i) => i.replayable
 const multiInstances = computed(() =>
   Object.entries(res.value?.stats.instances || {}).map(([id, n]) => `${m.value.entities.find((e) => e.id === Number(id))?.name} ×${n}`),
 )

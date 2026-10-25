@@ -15,8 +15,15 @@ import re
 from .i18n import translator
 
 NONE = 0
-# parole (it/en) che nei nomi degli stati finali indicano "non c'è più"
-GONE_WORDS = re.compile(r"ELIMIN|CESTIN|CANCEL|ANNULL|STORN|RIMOSS|ARCHIV|DELET|REMOV|TRASH|VOID|REVERS|WITHDRAW", re.I)
+# proposta per i nuovi stati in base al nome (it/en): spento si recupera, eliminato no
+OFF_WORDS = re.compile(r"DISABILIT|DISATTIV|SOSPES|INATTIV|CESTIN|ARCHIV|DISABLED|INACTIVE|SUSPEND|PAUSED|TRASH", re.I)
+GONE_WORDS = re.compile(r"ELIMIN|CANCEL|ANNULL|STORN|RIMOSS|DELET|REMOV|VOID|REVERS|WITHDRAW", re.I)
+# formato 1 (stati "assente" sulle relazioni): parole usate allora, solo per convertire i dati vecchi
+LEGACY_GONE_WORDS = re.compile(r"ELIMIN|CESTIN|CANCEL|ANNULL|STORN|RIMOSS|ARCHIV|DELET|REMOV|TRASH|VOID|REVERS|WITHDRAW", re.I)
+
+
+def suggest_liveness(name: str) -> str:
+    return "off" if OFF_WORDS.search(name) else "gone" if GONE_WORDS.search(name) else "active"
 
 
 def is_create(t: dict) -> bool:
@@ -46,7 +53,7 @@ def active_states(e: dict) -> list[int]:
 
 def looks_gone(state: dict) -> bool:
     """Proposta dal nome: uno stato finale come ELIMINATA o DELETED di solito vuol dire "non c'è più"."""
-    return bool(state.get("is_final")) and bool(GONE_WORDS.search(state["name"]))
+    return bool(state.get("is_final")) and bool(LEGACY_GONE_WORDS.search(state["name"]))
 
 
 def legacy_gone_states(model: dict) -> set[int]:

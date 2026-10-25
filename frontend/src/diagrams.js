@@ -20,10 +20,8 @@ export function stateDiagram(entity, { current = null, highlight = [], direction
       L.push(`  [*] --> s${tr.to_state_id} : ${label}`)
       continue
     }
-    const froms = tr.from_state_id
-      ? [tr.from_state_id]
-      : entity.states.filter((s) => !s.is_final && s.id !== tr.to_state_id).map((s) => s.id)
-    for (const f of froms) L.push(`  s${f} --> s${tr.to_state_id} : ${label}`)
+    // from_states: stati da cui l'azione parte, calcolati dal backend con la regola del motore
+    for (const f of tr.from_states) L.push(`  s${f} --> s${tr.to_state_id} : ${label}`)
   }
   for (const s of entity.states.filter((s) => s.is_final)) L.push(`  s${s.id} --> [*]`)
   L.push(`  classDef final fill:#fafafa,stroke:#a1a1aa,stroke-width:2px,stroke-dasharray:4 3,color:#3f3f46`)

@@ -1,7 +1,7 @@
 <script setup>
 import { computed, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { store, api, reloadModel, entity, ename, sname, toast, isCreatable, goneStates, offStates, suggestLiveness } from '../store'
+import { store, api, reloadModel, mutate, entity, ename, sname, toast, isCreatable, goneStates, offStates } from '../store'
 import { pal, KINDS, COLORS, PALETTE } from '../colors'
 import { t } from '../i18n'
 import { stateDiagram, contextMap, neighborhood } from '../diagrams'
@@ -53,44 +53,28 @@ async function removeEntity() {
 
 // ---------- stati ----------
 async function addState() {
-  const name = newState.value.trim().toUpperCase().replace(/\s+/g, '_')
-  if (!name) return
-  await api.post('/states', {
-    entity_id: e.value.id, name, pos: e.value.states.length, is_initial: e.value.states.length ? 0 : 1,
-    liveness: suggestLiveness(name),
-  })
+  if (!newState.value.trim()) return
+  // nome normalizzato, posizione, stato iniziale e vita proposta li decide il backend
+  await mutate(api.post('/states', { entity_id: e.value.id, name: newState.value }))
   newState.value = ''
-  await reloadModel()
 }
 async function patchState(s, patch) {
   await api.put(`/states/${s.id}`, patch)
   await reloadModel()
 }
 async function removeState(s) {
-  // tutto ciò che verrebbe eliminato o resterebbe orfano, anche nelle altre entità
-  const all = m.value.entities.flatMap((x) => x.transitions.map((tr) => ({ x, tr })))
-  const lost = [
-    ...e.value.transitions.filter((tr) => tr.from_state_id === s.id || tr.to_state_id === s.id)
-      .map((tr) => t('entity.lost.action', { action: tr.action })),
-    ...all.flatMap(({ x, tr }) => tr.effects.filter((f) => f.to_state_id === s.id)
-      .map(() => t('entity.lost.effect', { action: tr.action, entity: x.name }))),
-    ...all.flatMap(({ x, tr }) => tr.guards.filter((g) => g.state_ids?.includes(s.id))
-      .map(() => t('entity.lost.guard', { action: tr.action, entity: x.name }))),
-    ...m.value.invariants.filter((i) => i.rules.some((r) => r.state_ids.includes(s.id)))
-      .map((i) => t('entity.lost.invariant', { name: i.name })),
-  ]
+  // cosa si perde o va rivisto, anche nelle altre entità: il backend lo calcola e poi ripulisce i riferimenti
+  const lost = (await api.get(`/states/${s.id}/impact`)).map((x) => t(`entity.lost.${x.kind}`, x))
   if (lost.length && !confirm(t('entity.confirmDeleteState', { name: s.name, list: lost.join('\n- ') }))) return
-  await api.del(`/states/${s.id}`)
-  await reloadModel()
+  await mutate(api.del(`/states/${s.id}`))
 }
 async function moveState(s, dir) {
-  const list = [...e.value.states]
-  const i = list.indexOf(s)
+  const ids = e.value.states.map((x) => x.id)
+  const i = ids.indexOf(s.id)
   const j = i + dir
-  if (j < 0 || j >= list.length) return
-  ;[list[i], list[j]] = [list[j], list[i]]
-  await Promise.all(list.map((x, k) => api.put(`/states/${x.id}`, { pos: k })))
-  await reloadModel()
+  if (j < 0 || j >= ids.length) return
+  ;[ids[i], ids[j]] = [ids[j], ids[i]]
+  await mutate(api.post(`/entities/${e.value.id}/states/order`, { ids }))
 }
 
 // ---------- attributi ----------
@@ -158,29 +142,11 @@ const effectText = (f) =>
   (f.kind === 'create' ? t('entity.effect.created') : f.kind === 'action' ? t('entity.effect.runs', { action: f.action }) : sname(f.to_state_id)) +
   (f.skip_final ? ` ${t('entity.effect.activeOnly')}` : '')
 async function saveTransition() {
+  // azione, guardie ed effetti in una sola chiamata e una sola transazione: o si salva tutto o niente
   const d = draft.value
-  const body = {
-    entity_id: e.value.id, kind: d.kind || 'normal', cascade_only: d.cascade_only ? 1 : 0,
-    from_state_id: d.from_state_id, to_state_id: d.to_state_id,
-    action: d.action.trim(), actor: d.actor, description: d.description,
-  }
-  const saved = d.id ? await api.put(`/transitions/${d.id}`, body) : await api.post('/transitions', body)
-  const orig = d.id ? e.value.transitions.find((x) => x.id === d.id) : { guards: [], effects: [] }
-  const sync = async (table, oldList, newList) => {
-    const keep = new Set(newList.filter((x) => x.id).map((x) => x.id))
-    await Promise.all([
-      ...oldList.filter((x) => !keep.has(x.id)).map((x) => api.del(`/${table}/${x.id}`)),
-      ...newList.map((x) => (x.id ? api.put(`/${table}/${x.id}`, x) : api.post(`/${table}`, { ...x, transition_id: saved.id }))),
-    ])
-  }
-  await sync('guards', orig.guards, d.guards)
-  for (const f of d.effects) {
-    if (f.kind !== 'state') f.to_state_id = null
-    if (f.kind !== 'action') f.action = ''
-  }
-  await sync('effects', orig.effects, d.effects)
+  const body = { ...d, entity_id: e.value.id, kind: d.kind || 'normal' }
+  await mutate(d.id ? api.put(`/transitions/${d.id}`, body) : api.post('/transitions', body))
   draft.value = null
-  await reloadModel()
   toast(t('entity.actionSaved'))
 }
 async function removeTransition(tr) {
@@ -237,10 +203,8 @@ const actionNames = computed(() => [...new Set(e.value.transitions.map((tr) => t
 const matrixRows = computed(() => (creatable.value ? [{ id: 0 }, ...e.value.states] : e.value.states))
 function cell(stateId, action) {
   if (stateId === 0) return creations.value.filter((tr) => tr.action === action)
-  const s = e.value.states.find((x) => x.id === stateId)
-  return evolutions.value.filter(
-    (tr) => tr.action === action && (tr.from_state_id === stateId || (tr.from_state_id == null && !s.is_final && tr.to_state_id !== stateId)),
-  )
+  // from_states: stati da cui l'azione parte, con la stessa regola del motore (anche per "da qualsiasi")
+  return evolutions.value.filter((tr) => tr.action === action && tr.from_states.includes(stateId))
 }
 
 const guardText = (g) =>

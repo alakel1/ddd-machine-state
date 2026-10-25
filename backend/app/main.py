@@ -4,11 +4,11 @@ from fastapi import Body, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import db
-from .engine import Engine
+from . import db, editing
+from .engine import Engine, is_create
 from .i18n import translator
 from .portability import export_markdown, import_model
-from .relations import derived_invariants
+from .relations import derived_invariants, gone_states, off_states
 from .seed import seed_if_empty
 
 app = FastAPI(title="DDD Machine Status")
@@ -43,13 +43,27 @@ def list_domains():
             FROM domains d ORDER BY d.id""")
 
 
+def model_payload(conn, domain_id: int, lang: str) -> dict:
+    """Il modello come lo usa il frontend: con i dati ricavati dalle regole del motore, per non ricalcolarli lì."""
+    m = _model_or_404(conn, domain_id, lang)
+    eng = Engine(m, lang)
+    for e in m["entities"]:
+        e["gone_states"], e["off_states"] = gone_states(e), off_states(e)
+        for t in e["transitions"]:
+            # stati da cui l'azione parte davvero ("da qualsiasi" = ogni stato non finale diverso dall'arrivo)
+            t["from_states"] = [] if is_create(t) else [s["id"] for s in e["states"] if eng.applies_from(t, s["id"])]
+    m["derived_invariants"] = derived_invariants(m, eng.t)  # sola lettura: nascono dalle composizioni
+    return m
+
+
+def _not_found(request: Request):
+    raise HTTPException(404, translator(lang_of(request))("api.not_found"))
+
+
 @app.get("/api/domains/{domain_id}/model")
 def get_model(domain_id: int, request: Request):
-    lang = lang_of(request)
     with db.tx() as conn:
-        m = _model_or_404(conn, domain_id, lang)
-    m["derived_invariants"] = derived_invariants(m, translator(lang))  # sola lettura: nascono dalle composizioni
-    return m
+        return model_payload(conn, domain_id, lang_of(request))
 
 
 @app.get("/api/domains/{domain_id}/export")
@@ -100,7 +114,17 @@ def apply(domain_id: int, request: Request, payload: dict = Body(...)):
     lang = lang_of(request)
     with db.tx() as conn:
         eng = Engine(_model_or_404(conn, domain_id, lang), lang)
-    return eng.apply(payload.get("state") or {}, int(payload["transition_id"]), bool(payload.get("force")))
+    r = eng.apply(payload.get("state") or {}, int(payload["transition_id"]), bool(payload.get("force")))
+    # il simulatore mostra subito le azioni disponibili dal nuovo stato: niente seconda chiamata a /evaluate
+    return {**r, "evaluation": eng.evaluate(r["state"])} if r["ok"] else r
+
+
+@app.post("/api/domains/{domain_id}/replay")
+def replay(domain_id: int, request: Request, payload: dict = Body(...)):
+    lang = lang_of(request)
+    with db.tx() as conn:
+        eng = Engine(_model_or_404(conn, domain_id, lang), lang)
+    return eng.replay(payload.get("trace") or [])
 
 
 @app.get("/api/domains/{domain_id}/initial")
@@ -134,6 +158,57 @@ def scenarios(domain_id: int):
         return db.rows(conn, "scenarios", "SELECT * FROM scenarios WHERE domain_id=? ORDER BY id DESC", (domain_id,))
 
 
+# ---------------- modifiche con regole di dominio (prima del CRUD generico, che altrimenti le intercetta) ----------------
+# rispondono con il modello aggiornato: il frontend non deve ricaricarlo
+@app.post("/api/entities")
+def create_entity(request: Request, payload: dict = Body(...)):
+    with db.tx() as conn:
+        eid = editing.create_entity(conn, payload)
+        return {"id": eid, "model": model_payload(conn, payload["domain_id"], lang_of(request))}
+
+
+@app.post("/api/states")
+def create_state(request: Request, payload: dict = Body(...)):
+    with db.tx() as conn:
+        sid = editing.create_state(conn, payload)
+        return {"id": sid, "model": model_payload(conn, editing.domain_of_entity(conn, payload["entity_id"]), lang_of(request))}
+
+
+@app.get("/api/states/{state_id}/impact")
+def state_impact(state_id: int, request: Request):
+    with db.tx() as conn:
+        if not db.get(conn, "states", state_id):
+            _not_found(request)
+        return editing.state_impact(conn, state_id)
+
+
+@app.delete("/api/states/{state_id}")
+def delete_state(state_id: int, request: Request):
+    with db.tx() as conn:
+        did = editing.domain_of_state(conn, state_id)
+        if did is None:
+            _not_found(request)
+        editing.delete_state(conn, state_id)
+        return {"model": model_payload(conn, did, lang_of(request))}
+
+
+@app.post("/api/entities/{entity_id}/states/order")
+def reorder_states(entity_id: int, request: Request, payload: dict = Body(...)):
+    with db.tx() as conn:
+        editing.reorder_states(conn, entity_id, [int(x) for x in payload["ids"]])
+        return {"model": model_payload(conn, editing.domain_of_entity(conn, entity_id), lang_of(request))}
+
+
+@app.post("/api/transitions")
+@app.put("/api/transitions/{transition_id}")
+def save_transition(request: Request, payload: dict = Body(...), transition_id: int | None = None):
+    with db.tx() as conn:
+        if transition_id is not None and not db.get(conn, "transitions", transition_id):
+            _not_found(request)
+        tid = editing.save_transition(conn, payload, transition_id)
+        return {"id": tid, "model": model_payload(conn, editing.domain_of_entity(conn, payload["entity_id"]), lang_of(request))}
+
+
 # ---------------- CRUD generico ----------------
 def _check_table(table: str, request: Request):
     if table not in db.TABLES:
@@ -158,6 +233,8 @@ def update(table: str, id_: int, request: Request, payload: dict = Body(...)):
         if table == "states" and payload.get("is_initial"):
             ent = db.get(conn, "states", id_)["entity_id"]
             conn.execute("UPDATE states SET is_initial=0 WHERE entity_id=? AND id<>?", (ent, id_))
+        if table == "states" and "name" in payload:
+            payload = {**payload, "name": editing.state_name(payload["name"])}
         db.update(conn, table, id_, payload)
         return db.get(conn, table, id_)
 

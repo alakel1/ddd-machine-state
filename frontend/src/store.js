@@ -51,6 +51,18 @@ export async function loadModel(id) {
 
 export const reloadModel = () => store.model && loadModel(store.model.id)
 
+/** Esegue una modifica che risponde con il modello aggiornato (es. { id, model }) e lo adotta. */
+export async function mutate(promise) {
+  const res = await promise
+  if (res?.model) store.model = res.model
+  return res
+}
+
+/** Nuova entità: posizione e colore li decide il backend. */
+export async function createEntity(domainId) {
+  return mutate(api.post('/entities', { domain_id: domainId, name: t('entity.defaultName') }))
+}
+
 // --- lookup sul modello corrente ---
 export function entity(id) {
   const real = store.model?.entities.find((e) => e.id === id)
@@ -76,11 +88,6 @@ export function stateById(id) {
 }
 export const sname = (id) => (id == null ? '∗' : stateById(id)?.name ?? '?')
 export const ename = (id) => entity(id)?.name ?? '?'
-/** Stati in cui l'entità è eliminata per le composizioni: NON_ESISTE più quelli marcati "eliminato" nella sua scheda. */
-export const goneStates = (e) => [NONE, ...(e?.states || []).filter((s) => s.liveness === 'gone').map((s) => s.id)]
-/** Stati in cui l'entità è spenta: esiste ancora, ma è disattivata (si può riaccendere). */
-export const offStates = (e) => (e?.states || []).filter((s) => s.liveness === 'off').map((s) => s.id)
-// proposta per i nuovi stati in base al nome (it/en): spento si recupera, eliminato no
-const OFF_WORDS = /DISABILIT|DISATTIV|SOSPES|INATTIV|CESTIN|ARCHIV|DISABLED|INACTIVE|SUSPEND|PAUSED|TRASH/i
-const GONE_WORDS = /ELIMIN|CANCEL|ANNULL|STORN|RIMOSS|DELET|REMOV|VOID|REVERS|WITHDRAW/i
-export const suggestLiveness = (name) => (OFF_WORDS.test(name) ? 'off' : GONE_WORDS.test(name) ? 'gone' : 'active')
+// stati eliminati (NON_ESISTE compreso) e spenti dell'entità: li calcola il backend con le regole del motore
+export const goneStates = (e) => e?.gone_states ?? [NONE]
+export const offStates = (e) => e?.off_states ?? []

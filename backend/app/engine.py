@@ -385,6 +385,20 @@ class Engine:
         return {"ok": True, "state": new, "steps": steps, "conflicts": [c["message"] for c in conflicts],
                 "forced": bool(force and (fails or conflicts)), "violations": self.violations(new)}
 
+    def replay(self, trace: list[dict]) -> dict:
+        """Riesegue un percorso dallo stato iniziale; si ferma al primo passo non eseguibile."""
+        state, history = self.initial_state(), []
+        for step in trace:
+            t = self.transition.get(int(step["transition_id"]))
+            r = self.apply(state, t["id"] if t else 0)
+            if not r["ok"]:
+                break
+            history.append({**r, "prev": state, "transition_id": t["id"], "entity_id": t["entity_id"],
+                            "action": t["action"], "actor": t["actor"]})
+            state = r["state"]
+        return {"state": state, "history": history, "complete": len(history) == len(trace),
+                "evaluation": self.evaluate(state)}
+
     # ---------- esplorazione dello spazio degli stati ----------
     def explore(self, start: dict | None = None, limit: int = DEFAULT_EXPLORE_LIMIT) -> dict:
         # l'esplorazione è il calcolo costoso: analisi e matrice la condividono finché il modello non cambia
@@ -636,6 +650,10 @@ class Engine:
                 add("warning", "dead_actions", "a.dead_action", params={"action": t["action"], "entity": self.ename(t["entity_id"])},
                     entity_id=t["entity_id"], transition_id=t["id"])
 
+        # il simulatore ha un'istanza per entità: i percorsi che passano dalle copie #2, #3 (id negativi) non si riproducono
+        for i in issues:
+            if i.get("trace") is not None:
+                i["replayable"] = all(s["transition_id"] > 0 for s in i["trace"])
         order = {"error": 0, "warning": 1, "info": 2}
         issues.sort(key=lambda i: order.get(i["severity"], 3))
         return {

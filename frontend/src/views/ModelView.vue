@@ -1,8 +1,8 @@
 <script setup>
 import { computed, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { store, api, reloadModel, loadDomains, ename } from '../store'
-import { pal, COLORS } from '../colors'
+import { store, api, reloadModel, loadDomains, ename, createEntity, toast } from '../store'
+import { pal } from '../colors'
 import { t, locale } from '../i18n'
 import { contextMap, domainStateMap } from '../diagrams'
 import PageHeader from '../components/PageHeader.vue'
@@ -67,12 +67,9 @@ async function saveDomain() {
 }
 
 async function addEntity() {
-  const e = await api.post('/entities', {
-    domain_id: m.value.id, name: t('entity.defaultName'), pos: m.value.entities.length,
-    color: COLORS[m.value.entities.length % COLORS.length],
-  })
-  await reloadModel()
-  router.push(`/d/${m.value.id}/entity/${e.id}`)
+  const { id } = await createEntity(m.value.id)
+  router.push(`/d/${m.value.id}/entity/${id}`)
+  toast(t('toast.entityCreated'))
 }
 
 function openRelation(r) {

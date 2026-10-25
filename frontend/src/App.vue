@@ -1,8 +1,8 @@
 <script setup>
 import { computed, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { store, loadDomains, loadModel, api, toast } from './store'
-import { pal, COLORS } from './colors'
+import { store, loadDomains, loadModel, createEntity, toast } from './store'
+import { pal } from './colors'
 import { t, locale, setLocale, LOCALES } from './i18n'
 
 const route = useRoute()
@@ -32,12 +32,8 @@ const entityGroups = computed(() => {
 })
 
 async function addEntity() {
-  const e = await api.post('/entities', {
-    domain_id: domainId.value, name: t('entity.defaultName'), pos: store.model.entities.length,
-    color: COLORS[store.model.entities.length % COLORS.length],
-  })
-  await loadModel(domainId.value)
-  router.push(`/d/${domainId.value}/entity/${e.id}`)
+  const { id } = await createEntity(domainId.value)
+  router.push(`/d/${domainId.value}/entity/${id}`)
   toast(t('toast.entityCreated'))
 }
 </script>
