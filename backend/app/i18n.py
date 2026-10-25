@@ -334,9 +334,19 @@ def normalize(lang: str | None) -> str:
 
 def translator(lang: str | None = None):
     msgs = MESSAGES[normalize(lang)]
+    done = {}  # l'esplorazione chiede milioni di volte gli stessi messaggi: li formatta una volta sola
 
     def t(key: str, **params) -> str:
-        return msgs[key].format(**params) if params else msgs[key]
+        if not params:
+            return msgs[key]
+        k = (key, *params.items())
+        try:
+            out = done.get(k)
+        except TypeError:  # parametri non hashable: niente memoria
+            return msgs[key].format(**params)
+        if out is None:
+            out = done[k] = msgs[key].format(**params)
+        return out
 
     t.lang = normalize(lang)
     return t

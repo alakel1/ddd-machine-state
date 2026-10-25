@@ -13,6 +13,7 @@ import hashlib
 import json
 import threading
 from collections import OrderedDict, deque
+from operator import itemgetter
 
 from .i18n import translator
 from .relations import derived_invariants, expand, relation_issues
@@ -49,6 +50,19 @@ class Engine:
             t["id"]: [(g["entity_id"], tuple(g.get("entity_ids") or ()), frozenset(g["state_ids"]), bool(g["negate"]))
                       for g in t["guards"] if g["kind"] == "state" and g.get("entity_id") is not None]
             for t in self.transitions}
+        # invarianti sulla chiave di stato (tupla): regole come (posizioni, stati, negate),
+        # più l'indice posizione -> invarianti che la leggono, per ricontrollare solo quelle toccate da una mossa
+        pos = {eid: i for i, eid in enumerate(self.order)}
+        self._inv_key, self._inv_by_pos = [], {}
+        for inv, rules in self._inv_fast:
+            compiled = [(tuple(pos[x] for x in (many or (eid,))), ids, neg) for eid, ids, neg, many in rules
+                        if eid in pos and all(x in pos for x in many)]
+            if not compiled:
+                continue
+            for p in {p for r in compiled for p in r[0]}:
+                self._inv_by_pos.setdefault(p, []).append(len(self._inv_key))
+            self._inv_key.append((inv, compiled))
+        self._keyget = itemgetter(*self.order) if len(self.order) > 1 else None
         self.creatable = {e["id"] for e in self.entities if any(is_create(t) for t in e["transitions"])}
         # stati "di riposo" che non contano come blocco: NONE e l'iniziale delle entità non creabili
         self.resting = {NONE} | {sid for eid, sid in self.initial_state().items() if eid not in self.creatable}
@@ -98,6 +112,8 @@ class Engine:
         return st
 
     def key(self, state: dict) -> tuple:
+        if self._keyget:
+            return self._keyget(state)
         return tuple(state[e] for e in self.order)
 
     def from_key(self, key: tuple) -> dict:
@@ -166,7 +182,9 @@ class Engine:
     def _conflict(self, t: dict, what: str, eid, depth: int, reason: str, details=(), gap=None, fix=None) -> dict:
         """Conflitto strutturato: quale effetto di t (what) non riesce e perché (reason, details = guardie che bloccano).
         gap: la transizione che manca all'entità coinvolta ({"from", "to"} oppure {"from", "action"}).
-        fix: (chiave, entità su cui intervenire, parametri) del suggerimento; con un gap si ricava da solo."""
+        fix: (chiave, entità su cui intervenire, parametri) del suggerimento; con un gap si ricava da solo.
+        what può essere una funzione: il testo si costruisce solo quando il conflitto c'è davvero."""
+        what = what() if callable(what) else what
         if gap and fix is None:
             src = self.sname(gap["from"])
             if self.is_final(gap["from"]):
@@ -212,7 +230,7 @@ class Engine:
                 continue
             if cur == target:
                 continue
-            what = self.t("effect.what_state", entity=self.ename(eid), src=self.sname(cur), dst=self.sname(target))
+            what = lambda: self.t("effect.what_state", entity=self.ename(eid), src=self.sname(cur), dst=self.sname(target))
             cands = [c for c in self.outgoing(eid, cur) if c["to_state_id"] == target]
             if not cands and cur == NONE:
                 # l'entità non esiste e non c'è un modo di crearla in quello stato:
@@ -253,7 +271,7 @@ class Engine:
         """Effetto "esegui azione": l'entità esegue l'azione con quel nome disponibile dal suo stato attuale."""
         eid, name = eff["entity_id"], eff.get("action", "").strip()
         cur = state[eid]
-        what = self.t("effect.what_action", entity=self.ename(eid), name=name)
+        what = lambda: self.t("effect.what_action", entity=self.ename(eid), name=name)
         if cur == NONE:
             # nessuna istanza da coinvolgere (es. un regolamento senza modelli): l'effetto non si applica
             return state, [{"transition_id": None, "entity_id": eid, "action": self.t("step.missing_action", action=name),
@@ -287,7 +305,7 @@ class Engine:
     def _fire_creation(self, t: dict, eff: dict, state: dict, depth: int, chain: frozenset):
         """Effetto "crea": l'entità nasce tramite l'unica azione di creazione con guardie soddisfatte."""
         eid = eff["entity_id"]
-        what = self.t("effect.what_create", entity=self.ename(eid))
+        what = lambda: self.t("effect.what_create", entity=self.ename(eid))
         if state[eid] != NONE:
             # un'istanza esiste già: con relazioni 1-N ne nascerebbe un'altra, che il simulatore non rappresenta
             return state, [{"transition_id": None, "entity_id": eid, "action": self.t("step.already_exists"),
@@ -328,9 +346,12 @@ class Engine:
         return out
 
     # ---------- invarianti ----------
-    def violations(self, state: dict) -> list[dict]:
+    def violations(self, state: dict, skip=()) -> list[dict]:
+        """Invarianti violate nello stato; skip: id da non controllare (l'esplorazione salta quelle già trovate)."""
         out = []
         for inv, rules in self._inv_fast:
+            if inv["id"] in skip:
+                continue
             rules = [r for r in rules if r[0] in state]
             if not rules:
                 continue
@@ -433,6 +454,23 @@ class Engine:
                 _EXPLORE_CACHE.popitem(last=False)
             return result
 
+    def _reads(self, t: dict) -> list:
+        """Entità il cui stato può influire sull'esito di t con la sua cascata: la sua, quelle delle guardie
+        e, seguendo gli effetti, i bersagli con tutte le loro azioni (guardie ed effetti a loro volta)."""
+        ents, seen, stack = {t["entity_id"]}, set(), [t]
+        while stack:
+            x = stack.pop()
+            if x["id"] in seen:
+                continue
+            seen.add(x["id"])
+            for g in x["guards"]:
+                if g["kind"] == "state" and g.get("entity_id") is not None:
+                    ents.update((g["entity_id"], *(g.get("entity_ids") or ())))
+            for f in x["effects"]:
+                ents.add(f["entity_id"])
+                stack.extend(self.entity[f["entity_id"]]["transitions"])
+        return [e for e in self.order if e in ents]
+
     def _explore(self, start: dict | None, limit: int) -> dict:
         start = self.normalize(start) if start else self.initial_state()
         k0 = self.key(start)
@@ -441,26 +479,66 @@ class Engine:
         enabled_ever = set()
         conflicts, deadlocks, violations = {}, [], {}
         truncated = False
+        inv_key, by_pos = self._inv_key, self._inv_by_pos
 
+        def check(key, candidates):
+            # la BFS trova per prima la violazione col percorso più breve: le invarianti già violate non si ricontrollano
+            for i in candidates:
+                inv, rules = inv_key[i]
+                if inv["id"] in violations:
+                    continue
+                for positions, ids, neg in rules:
+                    if any((key[p] in ids) == neg for p in positions):
+                        break
+                else:
+                    violations[inv["id"]] = {"id": inv["id"], "name": inv["name"], "severity": inv["severity"],
+                                             "description": inv["description"], "key": key}
+
+        # l'esito di un'azione dipende solo dalle entità che la sua cascata può leggere:
+        # si memorizza per (azione, stati di quelle entità) e si riusa negli altri stati globali
+        readers, outcomes = {}, {}
+
+        def fire_cached(t, st):
+            r = readers.get(t["id"])
+            if r is None:
+                ids = self._reads(t)
+                r = readers[t["id"]] = (ids, itemgetter(*ids) if len(ids) > 1 else (lambda s, e=ids[0]: s[e]))
+            ids, get = r
+            mk = (t["id"], get(st))
+            hit = outcomes.get(mk)
+            if hit is None:
+                new, steps, conf = self.fire(t, st)
+                hit = outcomes[mk] = ({e: new[e] for e in ids if new[e] != st[e]}, steps, conf)
+                if not conf:
+                    # conta anche le azioni scattate in cascata come effetto (un esito riusato non aggiunge nulla)
+                    enabled_ever.update(x["transition_id"] for x in steps if x["transition_id"])
+                return new, steps, conf
+            changes, steps, conf = hit
+            return ({**st, **changes} if changes else st), steps, conf
+
+        # azioni che si possono lanciare direttamente da (entità, stato), precalcolate
+        movable = {}
+        for e in self.entities:
+            for s in self.states_of(e["id"]):
+                movable[(e["id"], s["id"])] = [t for t in self.outgoing(e["id"], s["id"]) if not t.get("cascade_only")]
+        order, guards_ok = self.order, self.guards_ok
+
+        check(k0, range(len(inv_key)))
         while queue:
             k = queue.popleft()
             st = self.from_key(k)
-            for v in self.violations(st):
-                violations.setdefault(v["id"], {**v, "key": k})
             moves = 0
-            for eid in self.order:
-                for t in self.outgoing(eid, st[eid]):
-                    if t.get("cascade_only") or not self.guards_ok(t, st):
+            for eid, sid in zip(order, k):
+                for t in movable.get((eid, sid), ()):
+                    if not guards_ok(t, st):
                         continue
-                    new, steps, conf = self.fire(t, st)
+                    new, steps, conf = fire_cached(t, st)
                     if conf:
                         for c in conf:
                             conflicts.setdefault((t["id"], c["message"]), {"transition_id": t["id"], "message": c["message"],
                                                                            "key": k, "conflict": c, "steps": steps})
                         continue
                     moves += 1
-                    # conta anche le azioni scattate in cascata come effetto
-                    enabled_ever.update(x["transition_id"] for x in steps if x["transition_id"])
                     nk = self.key(new)
                     if nk not in parent:
                         if len(parent) >= limit:
@@ -468,6 +546,12 @@ class Engine:
                             continue
                         parent[nk] = (k, t["id"])
                         queue.append(nk)
+                        # le invarianti valide in k restano valide se la mossa non tocca le loro entità
+                        touched = set()
+                        for p, (a, b) in enumerate(zip(k, nk)):
+                            if a != b:
+                                touched.update(by_pos.get(p, ()))
+                        check(nk, sorted(touched))
             # un'entità che non esiste o mai avviata non è "bloccata"
             if moves == 0 and any(not self.is_final(s) and s not in self.resting for s in k):
                 if len(deadlocks) < 25:
