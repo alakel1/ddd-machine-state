@@ -76,8 +76,11 @@ export function stateById(id) {
 }
 export const sname = (id) => (id == null ? '∗' : stateById(id)?.name ?? '?')
 export const ename = (id) => entity(id)?.name ?? '?'
-/** Stati in cui l'entità "non c'è più" per le composizioni: NON_ESISTE più quelli marcati nella sua scheda. */
-export const goneStates = (e) => [NONE, ...(e?.states || []).filter((s) => s.is_gone).map((s) => s.id)]
-// nomi che di solito indicano "non c'è più", in it/en (stessa regola del backend): proposta per i nuovi stati
-const GONE_WORDS = /ELIMIN|CESTIN|CANCEL|ANNULL|STORN|RIMOSS|ARCHIV|DELET|REMOV|TRASH|VOID|REVERS|WITHDRAW/i
-export const looksGone = (name) => GONE_WORDS.test(name)
+/** Stati in cui l'entità è eliminata per le composizioni: NON_ESISTE più quelli marcati "eliminato" nella sua scheda. */
+export const goneStates = (e) => [NONE, ...(e?.states || []).filter((s) => s.liveness === 'gone').map((s) => s.id)]
+/** Stati in cui l'entità è spenta: esiste ancora, ma è disattivata (si può riaccendere). */
+export const offStates = (e) => (e?.states || []).filter((s) => s.liveness === 'off').map((s) => s.id)
+// proposta per i nuovi stati in base al nome (it/en): spento si recupera, eliminato no
+const OFF_WORDS = /DISABILIT|DISATTIV|SOSPES|INATTIV|CESTIN|ARCHIV|DISABLED|INACTIVE|SUSPEND|PAUSED|TRASH/i
+const GONE_WORDS = /ELIMIN|CANCEL|ANNULL|STORN|RIMOSS|DELET|REMOV|VOID|REVERS|WITHDRAW/i
+export const suggestLiveness = (name) => (OFF_WORDS.test(name) ? 'off' : GONE_WORDS.test(name) ? 'gone' : 'active')

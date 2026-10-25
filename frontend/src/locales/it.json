@@ -9,7 +9,8 @@
     "add": "Aggiungi",
     "swap": "Inverti",
     "confirmDelete": "Eliminare «{name}»?",
-    "quoted": "«{x}»"
+    "quoted": "«{x}»",
+    "or": "o"
   },
   "nav": {
     "domain": "Dominio",
@@ -34,8 +35,12 @@
     "any": "qualsiasi",
     "initial": "iniziale",
     "final": "finale",
-    "gone": "assente",
-    "goneHint": "In questo stato l'entità non c'è più: per le composizioni conta come se non esistesse. Non usarlo per stati da cui si torna indietro (es. DISABILITATA)."
+    "liveness": {
+      "active": "attivo",
+      "off": "spento",
+      "gone": "eliminato"
+    },
+    "livenessHint": "Attivo: l'entità esiste e opera. Spento: esiste ma è disattivata, si può riaccendere. Eliminato: non c'è più, non si torna indietro. Le composizioni lo usano per decidere cosa succede ai figli."
   },
   "kind": {
     "aggregate": "Aggregato",
@@ -127,13 +132,13 @@
     "cardinality": "Cardinalità",
     "instancesLabel": "Istanze di {child} simulate per ogni {parent}",
     "instancesWarning": "Vale solo per l'analisi (il simulatore resta a un'istanza). Trova casi come \"un figlio confermato e l'altro eliminato\", ma le combinazioni da esplorare crescono molto: se l'analisi risulta troncata, i risultati sono parziali.",
-    "goneIn": "{entity} è assente in:",
-    "goneEdit": "modifica nella scheda",
     "cardinalityHint": {
       "oneToOne": "Ogni {a} ha un solo {b}.",
       "oneToMany": "Ogni {a} ha più {b}.",
       "manyToMany": "Più {a} sono legati a più {b}."
-    }
+    },
+    "livenessEdit": "modifica nella scheda",
+    "livenessRule": "Quando il padre si spegne, i figli non possono restare attivi; quando viene eliminato, devono sparire."
   },
   "inv": {
     "eyebrow": "Regole del dominio",
@@ -219,7 +224,8 @@
       "deadlock": "deadlock",
       "dead_actions": "azioni morte",
       "composition": "composizione",
-      "relations": "relazioni"
+      "relations": "relazioni",
+      "liveness": "vita degli stati"
     },
     "noIssues": "Nessun problema trovato con questi filtri.",
     "openEntity": "Apri entità",
@@ -336,18 +342,19 @@
     },
     "saveAction": "Salva azione",
     "actionSaved": "Azione salvata",
-    "statesHintGone": "«Assente» indica gli stati in cui l'entità non c'è più, come ELIMINATA.",
+    "statesHintGone": "Per ogni stato indica se l'entità è attiva, spenta (recuperabile) o eliminata (definitivo).",
     "rel": {
       "title": "Relazioni",
-      "hint": "Come {name} è legata alle altre entità. Nelle composizioni, «assente» segue i tag sugli stati.",
+      "hint": "Come {name} è legata alle altre entità. Nelle composizioni contano gli stati spenti ed eliminati di ciascun lato.",
       "empty": "Nessuna relazione.",
       "parentOf": "padre di",
       "childOf": "figlio di",
       "to": "verso",
       "from": "da",
       "confirmDelete": "Eliminare la relazione {a} → {b}?",
-      "parentRule": "Quando {self} è assente ({states}), {child} non può restare vivo.",
-      "childRule": "{self} nasce solo se c'è {parent}, e non può restare vivo quando {parent} è assente ({states})."
+      "childBirth": "{self} nasce solo se c'è {parent}.",
+      "whenOff": "Con {a} in {states}, {b} non può restare attivo.",
+      "whenGone": "Con {a} in {states}, {b} deve sparire."
     },
     "tabs": {
       "detail": "Dettaglio",

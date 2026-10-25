@@ -1,7 +1,7 @@
 <script setup>
 import { computed, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { store, api, reloadModel, entity, ename, sname, toast, isCreatable, goneStates, looksGone } from '../store'
+import { store, api, reloadModel, entity, ename, sname, toast, isCreatable, goneStates, offStates, suggestLiveness } from '../store'
 import { pal, KINDS, COLORS, PALETTE } from '../colors'
 import { t } from '../i18n'
 import { stateDiagram, contextMap, neighborhood } from '../diagrams'
@@ -57,7 +57,7 @@ async function addState() {
   if (!name) return
   await api.post('/states', {
     entity_id: e.value.id, name, pos: e.value.states.length, is_initial: e.value.states.length ? 0 : 1,
-    is_gone: looksGone(name) ? 1 : 0,
+    liveness: suggestLiveness(name),
   })
   newState.value = ''
   await reloadModel()
@@ -199,7 +199,21 @@ const relations = computed(() =>
       return { r, isSource, other: entity(isSource ? r.target_id : r.source_id) }
     }),
 )
-const goneText = (x) => goneStates(x).map(sname).join(', ')
+// vita degli stati: attivo (esiste e opera), spento (disattivato, recuperabile), eliminato (non c'è più)
+const LIVENESS = { active: 'bg-emerald-600 text-white', off: 'bg-amber-500 text-white', gone: 'bg-rose-600 text-white' }
+// "A, B o C"
+const names = (ids) => {
+  const n = ids.map(sname)
+  return n.length > 1 ? `${n.slice(0, -1).join(', ')} ${t('common.or')} ${n.at(-1)}` : n.join('')
+}
+// cosa comporta una composizione, dal lato dell'entità della scheda
+function relationRule({ r, isSource, other }) {
+  const [parent, child] = isSource ? [e.value, other] : [other, e.value]
+  const parts = isSource ? [] : [t('entity.rel.childBirth', { self: child.name, parent: parent.name })]
+  if (offStates(parent).length) parts.push(t('entity.rel.whenOff', { a: parent.name, b: child.name, states: names(offStates(parent)) }))
+  parts.push(t('entity.rel.whenGone', { a: parent.name, b: child.name, states: names(goneStates(parent)) }))
+  return parts.join(' ')
+}
 async function removeRelation(r) {
   if (!confirm(t('entity.rel.confirmDelete', { a: ename(r.source_id), b: ename(r.target_id) }))) return
   await api.del(`/relations/${r.id}`)
@@ -325,7 +339,7 @@ const guardText = (g) =>
               <input :value="s.name" @change="(ev) => patchState(s, { name: ev.target.value.trim() })"
                      class="font-mono text-sm font-semibold w-44 bg-transparent rounded px-1.5 py-1 -mx-1.5 hover:bg-zinc-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/50" />
               <input :value="s.description" :placeholder="$t('entity.descriptionPlaceholder')" @change="(ev) => patchState(s, { description: ev.target.value })"
-                     class="flex-1 text-sm text-zinc-500 bg-transparent rounded px-1.5 py-1 hover:bg-zinc-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/50 placeholder:text-zinc-300" />
+                     class="flex-1 min-w-0 text-sm text-zinc-500 bg-transparent rounded px-1.5 py-1 hover:bg-zinc-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/50 placeholder:text-zinc-300" />
               <span v-if="creatable" class="tag" :class="birthStates.has(s.id) ? 'bg-indigo-50 text-indigo-700 ring-indigo-200' : 'invisible'">
                 <i class="fa-solid fa-seedling" /> {{ $t('entity.bornHere') }}
               </span>
@@ -333,8 +347,11 @@ const guardText = (g) =>
                       :class="s.is_initial ? 'bg-indigo-600 text-white ring-indigo-600' : 'bg-white text-zinc-400 ring-zinc-200 hover:text-zinc-700'">{{ $t('state.initial') }}</button>
               <button class="tag cursor-pointer transition" @click="patchState(s, { is_final: s.is_final ? 0 : 1 })"
                       :class="s.is_final ? 'bg-zinc-800 text-white ring-zinc-800' : 'bg-white text-zinc-400 ring-zinc-200 hover:text-zinc-700'">{{ $t('state.final') }}</button>
-              <button class="tag cursor-pointer transition" :title="$t('state.goneHint')" @click="patchState(s, { is_gone: s.is_gone ? 0 : 1 })"
-                      :class="s.is_gone ? 'bg-rose-600 text-white ring-rose-600' : 'bg-white text-zinc-400 ring-zinc-200 hover:text-zinc-700'">{{ $t('state.gone') }}</button>
+              <div class="shrink-0 inline-flex rounded-md bg-white ring-1 ring-inset ring-zinc-200 p-px" :title="$t('state.livenessHint')">
+                <button v-for="(cls, lv) in LIVENESS" :key="lv" type="button" @click="patchState(s, { liveness: lv })"
+                        class="rounded px-1.5 py-px text-[11px] font-medium whitespace-nowrap transition cursor-pointer"
+                        :class="(s.liveness || 'active') === lv ? cls : 'text-zinc-400 hover:text-zinc-700'">{{ $t(`state.liveness.${lv}`) }}</button>
+              </div>
               <button class="icon-btn opacity-0 group-hover:opacity-100 hover:!text-rose-600" @click="removeState(s)"><i class="fa-solid fa-trash-can fa-fw text-[12px]" /></button>
             </div>
           </div>
@@ -379,11 +396,7 @@ const guardText = (g) =>
                 <button class="icon-btn opacity-0 group-hover:opacity-100 hover:!text-rose-600" @click="removeRelation(x.r)"><i class="fa-solid fa-trash-can fa-fw text-[12px]" /></button>
               </div>
               <!-- cosa comporta la composizione, con gli stati "assente" di ciascun lato -->
-              <p v-if="x.r.composition" class="text-xs text-zinc-500 mt-1.5">
-                {{ x.isSource
-                  ? $t('entity.rel.parentRule', { self: e.name, child: x.other?.name, states: goneText(e) })
-                  : $t('entity.rel.childRule', { self: e.name, parent: x.other?.name, states: goneText(x.other) }) }}
-              </p>
+              <p v-if="x.r.composition && x.other" class="text-xs text-zinc-500 mt-1.5">{{ relationRule(x) }}</p>
             </div>
           </div>
         </section>

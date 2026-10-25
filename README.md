@@ -16,7 +16,7 @@ A context map of your entities grouped by bounded context, with declared relatio
 ![Domain overview](docs/screenshots/overview.png)
 
 ### Entity editor
-Define states (initial, final, gone), creation actions, transitions with guards and cascading effects, and the entity's relations with what each composition implies. A live state diagram, a *states × actions* table that exposes unhandled combinations, and a list of everyone who depends on the entity.
+Define states (initial, final; active, off or deleted), creation actions, transitions with guards and cascading effects, and the entity's relations with what each composition implies. A live state diagram, a *states × actions* table that exposes unhandled combinations, and a list of everyone who depends on the entity.
 
 ![Entity editor](docs/screenshots/entity.png)
 
@@ -47,14 +47,14 @@ JSON (round-trip import) and a functional specification in Markdown, analysis in
 | Concept | Meaning |
 |---|---|
 | **Entity** | Aggregate, entity or value object, with bounded context, attributes and lifecycle |
-| **State** | One initial state, zero or more final states. A state can also be marked **gone**: the entity no longer exists in it (e.g. DELETED), which is what compositions check |
+| **State** | One initial state, zero or more final states. Each state also says whether the entity is **active** (exists and operates), **off** (disabled but recoverable, e.g. DISABLED) or **deleted** (gone for good, e.g. DELETED) |
 | **Creation action** | A way the entity comes into existence: from `DOES_NOT_EXIST` to a state, with its own guards, effects and actor. An entity can have several |
 | **Action** | A transition `from → to` (from "any" = from every non-final state), with an actor |
 | **State guard** | Precondition: another entity must (or must not) be in given states |
 | **Rule** | Free-text business condition, shown as "to be verified" |
 | **Cascading effect** | The action forces another entity to change state, run an action or be created. If no valid transition exists, it's a **conflict** |
 | **Invariant** | A forbidden combination of states (AND of conditions); may use `DOES_NOT_EXIST` |
-| **Composition** | The child cannot exist without the parent: it must never be alive while the parent is gone (does not exist, or is in a *gone* state). The tool derives an invariant from it and checks that creating the child requires the parent and that the parent's removal drags the children along |
+| **Composition** | The child cannot exist without the parent. Two invariants follow: a child must be deleted when the parent is deleted (or does not exist), and cannot stay active when the parent is off. The tool also checks that creating the child requires the parent, and that the actions deleting or turning off the parent take care of the children |
 | **Multiple instances** | On a composition, simulate 2–3 children per parent in the analysis (e.g. "one item confirmed, the other deleted") |
 
 The simulation model has one instance per entity: a single business case, such as one order with its payment, shipment and invoice.

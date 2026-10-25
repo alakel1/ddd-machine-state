@@ -22,5 +22,7 @@ const e = computed(() => (props.entityId ? entity(props.entityId) : s.value && !
     {{ s ? s.name : $t('state.any') }}
     <i v-if="s?.is_initial" class="fa-solid fa-play text-[8px] opacity-50" :title="$t('state.initial')" />
     <i v-if="s?.is_final" class="fa-solid fa-flag-checkered text-[9px] opacity-50" :title="$t('state.final')" />
+    <i v-if="s?.liveness === 'off'" class="fa-solid fa-power-off text-[8px] opacity-50" :title="$t('state.liveness.off')" />
+    <i v-if="s?.liveness === 'gone'" class="fa-solid fa-trash-can text-[8px] opacity-50" :title="$t('state.liveness.gone')" />
   </span>
 </template>

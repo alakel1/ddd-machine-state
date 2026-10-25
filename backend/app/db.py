@@ -45,7 +45,7 @@ CREATE TABLE IF NOT EXISTS states (
     description TEXT NOT NULL DEFAULT '',
     is_initial INTEGER NOT NULL DEFAULT 0,
     is_final INTEGER NOT NULL DEFAULT 0,
-    is_gone INTEGER NOT NULL DEFAULT 0,  -- 1 = in questo stato l'entità "non c'è più" (composizioni)
+    liveness TEXT NOT NULL DEFAULT 'active',  -- active | off (spento, revertibile) | gone (eliminato, definitivo)
     pos INTEGER NOT NULL DEFAULT 0
 );
 
@@ -97,7 +97,7 @@ CREATE TABLE IF NOT EXISTS relations (
     target_id INTEGER NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
     cardinality TEXT NOT NULL DEFAULT '1-1',      -- 1-1 | 1-N | N-N (source è sempre il lato "1")
     label TEXT NOT NULL DEFAULT '',
-    -- composizione: target (figlio) non esiste senza source (padre); "assente" = NON_ESISTE o uno stato con is_gone
+    -- composizione: target (figlio) non esiste senza source (padre); vedi relations.py per la vita degli stati
     composition INTEGER NOT NULL DEFAULT 0,
     instances INTEGER NOT NULL DEFAULT 1            -- figli simulati per padre nell'analisi (1-3)
 );
@@ -130,7 +130,7 @@ TABLES = {
     "domains": {"fields": ["name", "description"], "json": []},
     "entities": {"fields": ["domain_id", "name", "description", "kind", "context", "color", "pos"], "json": []},
     "attributes": {"fields": ["entity_id", "name", "type", "required", "description"], "json": []},
-    "states": {"fields": ["entity_id", "name", "description", "is_initial", "is_final", "is_gone", "pos"], "json": []},
+    "states": {"fields": ["entity_id", "name", "description", "is_initial", "is_final", "liveness", "pos"], "json": []},
     "transitions": {"fields": ["entity_id", "kind", "cascade_only", "from_state_id", "to_state_id", "action", "actor", "description"], "json": []},
     "guards": {"fields": ["transition_id", "kind", "entity_id", "state_ids", "negate", "description"], "json": ["state_ids"]},
     "effects": {"fields": ["transition_id", "entity_id", "kind", "to_state_id", "action", "skip_final", "description"], "json": []},
@@ -170,22 +170,21 @@ def _effects_with_kind(conn):
     conn.execute("DROP TABLE effects_old")
 
 
-def _states_gone(conn):
-    """Gli stati "non c'è più" passano dalle singole relazioni allo stato: si ricavano dalle vecchie colonne."""
-    conn.execute("ALTER TABLE states ADD COLUMN is_gone INTEGER NOT NULL DEFAULT 0")
-    cols = {r["name"] for r in conn.execute("PRAGMA table_info(relations)")}
-    if "parent_gone_states" not in cols:
+def _states_liveness(conn):
+    """Vita dello stato (active | off | gone). Arriva da is_gone (spento non esisteva: 1 → gone)
+    oppure, sui database più vecchi, dagli stati "assente" scelti sulle singole relazioni."""
+    conn.execute("ALTER TABLE states ADD COLUMN liveness TEXT NOT NULL DEFAULT 'active'")
+    if "is_gone" in {r["name"] for r in conn.execute("PRAGMA table_info(states)")}:
+        conn.execute("UPDATE states SET liveness='gone' WHERE is_gone=1")
+        conn.execute("ALTER TABLE states DROP COLUMN is_gone")
+    if "parent_gone_states" not in {r["name"] for r in conn.execute("PRAGMA table_info(relations)")}:
         return
     for (did,) in conn.execute("SELECT id FROM domains").fetchall():
-        m = load_model(conn, did)
-        for e in m["entities"]:
-            for s in e["states"]:
-                s["is_gone"] = 0
         rels = [{**dict(r), "parent_gone_states": json.loads(r["parent_gone_states"] or "[0]"),
                  "child_gone_states": json.loads(r["child_gone_states"] or "[]")}
                 for r in conn.execute("SELECT * FROM relations WHERE domain_id=?", (did,))]
-        for sid in legacy_gone_states({**m, "relations": rels}):
-            conn.execute("UPDATE states SET is_gone=1 WHERE id=?", (sid,))
+        for sid in legacy_gone_states({**load_model(conn, did), "relations": rels}):
+            conn.execute("UPDATE states SET liveness='gone' WHERE id=?", (sid,))
     conn.execute("ALTER TABLE relations DROP COLUMN parent_gone_states")
     conn.execute("ALTER TABLE relations DROP COLUMN child_gone_states")
 
@@ -198,7 +197,7 @@ MIGRATIONS = [
     ("relations", "composition", "ALTER TABLE relations ADD COLUMN composition INTEGER NOT NULL DEFAULT 0"),
     ("relations", "instances", "ALTER TABLE relations ADD COLUMN instances INTEGER NOT NULL DEFAULT 1"),
     ("effects", "skip_final", "ALTER TABLE effects ADD COLUMN skip_final INTEGER NOT NULL DEFAULT 0"),
-    ("states", "is_gone", _states_gone),
+    ("states", "liveness", _states_liveness),
 ]
 
 

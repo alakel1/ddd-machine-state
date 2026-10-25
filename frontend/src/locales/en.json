@@ -9,7 +9,8 @@
     "add": "Add",
     "swap": "Swap",
     "confirmDelete": "Delete “{name}”?",
-    "quoted": "“{x}”"
+    "quoted": "“{x}”",
+    "or": "or"
   },
   "nav": {
     "domain": "Domain",
@@ -34,8 +35,12 @@
     "any": "any",
     "initial": "initial",
     "final": "final",
-    "gone": "gone",
-    "goneHint": "In this state the entity no longer exists: compositions treat it as if it did not exist. Don't use it for states you can come back from (e.g. DISABLED)."
+    "liveness": {
+      "active": "active",
+      "off": "off",
+      "gone": "deleted"
+    },
+    "livenessHint": "Active: the entity exists and operates. Off: it exists but is disabled, and can be turned back on. Deleted: it no longer exists, with no way back. Compositions use it to decide what happens to the children."
   },
   "kind": {
     "aggregate": "Aggregate",
@@ -127,13 +132,13 @@
     "cardinality": "Cardinality",
     "instancesLabel": "Instances of {child} simulated per {parent}",
     "instancesWarning": "Applies to the analysis only (the simulator keeps one instance). It finds cases like \"one child confirmed and the other deleted\", but the combinations to explore grow fast: if the analysis is truncated, the results are partial.",
-    "goneIn": "{entity} is gone in:",
-    "goneEdit": "edit in the entity page",
     "cardinalityHint": {
       "oneToOne": "Each {a} has a single {b}.",
       "oneToMany": "Each {a} has several {b}.",
       "manyToMany": "Several {a} are linked to several {b}."
-    }
+    },
+    "livenessEdit": "edit in the entity page",
+    "livenessRule": "When the parent is turned off, its children cannot stay active; when it is deleted, they must disappear."
   },
   "inv": {
     "eyebrow": "Domain rules",
@@ -219,7 +224,8 @@
       "deadlock": "deadlock",
       "dead_actions": "dead actions",
       "composition": "composition",
-      "relations": "relations"
+      "relations": "relations",
+      "liveness": "state liveness"
     },
     "noIssues": "No problems found with these filters.",
     "openEntity": "Open entity",
@@ -336,18 +342,19 @@
     },
     "saveAction": "Save action",
     "actionSaved": "Action saved",
-    "statesHintGone": "“Gone” marks the states in which the entity no longer exists, such as DELETED.",
+    "statesHintGone": "For each state, set whether the entity is active, off (recoverable) or deleted (final).",
     "rel": {
       "title": "Relations",
-      "hint": "How {name} is linked to the other entities. In compositions, “gone” follows the tags on the states.",
+      "hint": "How {name} is linked to the other entities. In compositions, what counts is the off and deleted states of each side.",
       "empty": "No relations.",
       "parentOf": "parent of",
       "childOf": "child of",
       "to": "to",
       "from": "from",
       "confirmDelete": "Delete the relation {a} → {b}?",
-      "parentRule": "When {self} is gone ({states}), {child} cannot stay alive.",
-      "childRule": "{self} is created only if {parent} exists, and cannot stay alive when {parent} is gone ({states})."
+      "childBirth": "{self} is created only if {parent} exists.",
+      "whenOff": "With {a} in {states}, {b} cannot stay active.",
+      "whenGone": "With {a} in {states}, {b} must disappear."
     },
     "tabs": {
       "detail": "Details",

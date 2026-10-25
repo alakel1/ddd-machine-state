@@ -474,6 +474,16 @@ class Engine:
         states = names[0] if len(names) == 1 else f"{', '.join(names[:-1])} {self.t('or')} {names[-1]}"
         return self.t("guard.text_not_in" if g["negate"] else "guard.text_in", entity=self.ename(g["entity_id"]), states=states)
 
+    def _local_reach(self, eid, sid) -> set:
+        """Stati dell'entità raggiungibili da sid con le sue sole transizioni, ignorando le guardie."""
+        seen, stack = set(), [sid]
+        while stack:
+            for t in self.outgoing(eid, stack.pop()):
+                if t["to_state_id"] not in seen:
+                    seen.add(t["to_state_id"])
+                    stack.append(t["to_state_id"])
+        return seen
+
     def _covers(self, own: dict, req: dict) -> bool:
         """La guardia own è almeno severa quanto req (es. Procedura ∈ {A, B} copre Procedura ∈ {A, B, C})."""
         if own["kind"] != "state" or req["kind"] != "state" or own["entity_id"] != req["entity_id"] \
@@ -526,6 +536,15 @@ class Engine:
                     add("warning", "dead_end", "a.dead_end", params=p, entity_id=e["id"], state_id=s["id"])
                 if s["is_final"] and any(t["from_state_id"] == s["id"] and not is_create(t) for t in e["transitions"]):
                     add("warning", "model", "a.final_outgoing", detail="", params=p, entity_id=e["id"], state_id=s["id"])
+                # vita dello stato: da eliminato non si torna indietro, da spento sì
+                life = s.get("liveness", "active")
+                back = [t for t in outs if self.state[t["to_state_id"]].get("liveness", "active") != "gone"]
+                if life == "gone" and back:
+                    add("warning", "liveness", "a.gone_exit", params={**p, "actions": ", ".join(q(t["action"]) for t in back)},
+                        entity_id=e["id"], state_id=s["id"])
+                if life == "off" and not any(self.state[x].get("liveness", "active") == "active"
+                                             for x in self._local_reach(e["id"], s["id"])):
+                    add("warning", "liveness", "a.off_no_way_back", params=p, entity_id=e["id"], state_id=s["id"])
                 by_action = {}
                 for t in outs:
                     by_action.setdefault(t["action"].strip().lower(), set()).add(t["to_state_id"])

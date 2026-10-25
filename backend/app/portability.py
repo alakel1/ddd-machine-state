@@ -9,9 +9,12 @@ def import_model(conn, m: dict, default_name: str = "") -> int:
     did = db.insert(conn, "domains", {"name": m.get("name") or default_name,
                                       "description": m.get("description", "")})
     E, S, T = {}, {}, {}
-    # JSON del formato 1: gli stati "assente" erano sulle relazioni, si ricavano da lì
-    has_flags = any("is_gone" in s for e in m["entities"] for s in e.get("states", []))
+    # vita degli stati: formato 3 "liveness"; formato 2 "is_gone" (1 = eliminato);
+    # formato 1: gli stati "assente" erano sulle relazioni e si ricavano da lì
+    states = [s for e in m["entities"] for s in e.get("states", [])]
+    has_flags = any("liveness" in s or "is_gone" in s for s in states)
     legacy_gone = set() if has_flags else legacy_gone_states(m)
+    liveness = lambda s: s.get("liveness") or ("gone" if s.get("is_gone") or s["id"] in legacy_gone else "active")
     for i, e in enumerate(m["entities"]):
         E[e["id"]] = db.insert(conn, "entities", {
             "domain_id": did, "name": e["name"], "description": e.get("description", ""),
@@ -24,7 +27,7 @@ def import_model(conn, m: dict, default_name: str = "") -> int:
             S[s["id"]] = db.insert(conn, "states", {
                 "entity_id": E[e["id"]], "name": s["name"], "description": s.get("description", ""),
                 "is_initial": s.get("is_initial", 0), "is_final": s.get("is_final", 0),
-                "is_gone": s.get("is_gone", int(s["id"] in legacy_gone)), "pos": s.get("pos", j)})
+                "liveness": liveness(s), "pos": s.get("pos", j)})
     S[0] = 0  # stato implicito "non esiste"
     for e in m["entities"]:
         for t in e.get("transitions", []):
@@ -97,7 +100,7 @@ def export_markdown(m: dict, lang: str | None = None) -> str:
             L += [f"### {t('md.states')}", ""]
             for s in e["states"]:
                 tags = (f" `{t('md.initial')}`" if s["is_initial"] else "") + (f" `{t('md.final')}`" if s["is_final"] else "") \
-                    + (f" `{t('md.gone')}`" if s.get("is_gone") else "")
+                    + (f" `{t('md.' + s['liveness'])}`" if s.get("liveness") in ("off", "gone") else "")
                 L.append(f"- **{s['name']}**{tags}" + (f" — {s['description']}" if s["description"] else ""))
             L.append("")
         if e["transitions"]:

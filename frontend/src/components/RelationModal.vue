@@ -1,7 +1,7 @@
 <script setup>
 // Crea o modifica una relazione: usato dalla Panoramica e dalla scheda entità
 import { computed, ref } from 'vue'
-import { store, api, reloadModel, ename, entity, toast, goneStates } from '../store'
+import { store, api, reloadModel, ename, entity, toast, goneStates, offStates } from '../store'
 import { t } from '../i18n'
 import Modal from './Modal.vue'
 import StateChip from './StateChip.vue'
@@ -78,14 +78,19 @@ async function save() {
           </span>
         </label>
         <template v-if="r.composition">
-          <!-- "assente" si decide sugli stati di ciascuna entità, qui si vede soltanto -->
-          <div v-for="eid in [r.source_id, r.target_id]" :key="eid" class="flex flex-wrap items-center gap-1.5 text-xs">
-            <span class="text-zinc-500">{{ $t('model.goneIn', { entity: ename(eid) }) }}</span>
-            <StateChip v-for="sid in goneStates(entity(eid))" :key="sid" :id="sid" :entity-id="eid" size="xs" />
-            <RouterLink :to="`/d/${m.id}/entity/${eid}`" class="text-indigo-600 hover:underline ml-1" @click="emit('close')">
-              {{ $t('model.goneEdit') }}
-            </RouterLink>
+          <!-- spento / eliminato si decidono sugli stati di ciascuna entità, qui si vedono soltanto -->
+          <div v-for="eid in [r.source_id, r.target_id]" :key="eid" class="text-xs space-y-1">
+            <div class="flex items-center gap-2">
+              <span class="font-medium text-zinc-700">{{ ename(eid) }}</span>
+              <RouterLink :to="`/d/${m.id}/entity/${eid}`" class="text-indigo-600 hover:underline" @click="emit('close')">{{ $t('model.livenessEdit') }}</RouterLink>
+            </div>
+            <div v-for="[lv, ids] in [['off', offStates(entity(eid))], ['gone', goneStates(entity(eid))]]" :key="lv" class="flex flex-wrap items-center gap-1.5 pl-3">
+              <span class="text-zinc-500 w-20">{{ $t(`state.liveness.${lv}`) }}</span>
+              <StateChip v-for="sid in ids" :key="sid" :id="sid" :entity-id="eid" size="xs" />
+              <span v-if="!ids.length" class="text-zinc-400">—</span>
+            </div>
           </div>
+          <p class="text-xs text-zinc-500">{{ $t('model.livenessRule', { parent: ename(r.source_id), child: ename(r.target_id) }) }}</p>
           <div class="flex items-center gap-3">
             <label class="label !mb-0">{{ $t('model.instancesLabel', { child: ename(r.target_id), parent: ename(r.source_id) }) }}</label>
             <select v-model.number="r.instances" class="input !w-20 !py-1.5">

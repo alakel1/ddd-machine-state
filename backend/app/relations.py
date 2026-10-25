@@ -1,9 +1,11 @@
 """Relazioni nel motore: composizione, istanze multiple e coerenza relazioni/regole.
 
+- Vita di un'entità: ogni stato è "active" (esiste e opera), "off" (spento: esiste ma è disattivato,
+  si può riaccendere) o "gone" (eliminato: non c'è più, non si torna indietro). NON_ESISTE conta come gone.
 - Composizione: una relazione source → target con composition=1 dice che il figlio (target)
-  non esiste senza il padre (source). Ne derivano un'invariante ("figlio vivo con padre assente")
-  e dei controlli statici su creazioni ed eliminazioni. "Assente" vale per entrambi i lati allo
-  stesso modo: NON_ESISTE oppure uno stato marcato is_gone nella scheda dell'entità.
+  non esiste senza il padre (source). Ne derivano due invarianti, "figlio non eliminato con padre
+  eliminato" e "figlio attivo con padre spento", e dei controlli statici su creazioni, eliminazioni
+  e spegnimenti.
 - Istanze multiple: sulla composizione si può chiedere di simulare 2-3 figli per padre.
   `expand` duplica l'entità figlia nel modello usato dall'analisi; il simulatore resta a un'istanza.
 """
@@ -25,9 +27,21 @@ def compositions(model: dict) -> list[dict]:
     return [r for r in model.get("relations", []) if r.get("composition")]
 
 
+LIVENESS = ("active", "off", "gone")
+
+
 def gone_states(e: dict) -> list[int]:
-    """Stati in cui l'entità "non c'è più": NON_ESISTE più quelli marcati nella sua scheda."""
-    return [NONE] + [s["id"] for s in e["states"] if s.get("is_gone")]
+    """Stati in cui l'entità è eliminata: NON_ESISTE più quelli marcati "gone" nella sua scheda."""
+    return [NONE] + [s["id"] for s in e["states"] if s.get("liveness") == "gone"]
+
+
+def off_states(e: dict) -> list[int]:
+    """Stati in cui l'entità è spenta: esiste ancora, ma è disattivata."""
+    return [s["id"] for s in e["states"] if s.get("liveness") == "off"]
+
+
+def active_states(e: dict) -> list[int]:
+    return [s["id"] for s in e["states"] if s.get("liveness", "active") == "active"]
 
 
 def looks_gone(state: dict) -> bool:
@@ -53,7 +67,7 @@ def legacy_gone_states(model: dict) -> set[int]:
 
 
 def derived_invariants(model: dict, t=None) -> list[dict]:
-    """Un'invariante per composizione: vietato un figlio vivo mentre il padre è assente."""
+    """Per composizione: vietato un figlio non eliminato con il padre eliminato, e un figlio attivo con il padre spento."""
     t = t or translator()
     ent = {e["id"]: e for e in model["entities"]}
     out = []
@@ -61,18 +75,22 @@ def derived_invariants(model: dict, t=None) -> list[dict]:
         parent, child = ent.get(r["source_id"]), ent.get(r["target_id"])
         if not parent or not child or not child["states"]:
             continue
-        dead = set(gone_states(child))
-        alive = [s["id"] for s in child["states"] if s["id"] not in dead]
-        gone = gone_states(parent)
-        if not alive:
-            continue
-        out.append({
-            "id": f"rel{r['id']}", "derived": True, "severity": "error",
-            "name": t("r.derived.name", child=child["name"], parent=parent["name"]),
-            "description": t("r.derived.desc", child=child["name"], parent=parent["name"]),
-            "rules": [{"entity_id": parent["id"], "state_ids": gone, "negate": 0},
-                      {"entity_id": child["id"], "state_ids": alive, "negate": 0}],
-        })
+        names = {"child": child["name"], "parent": parent["name"]}
+        not_gone = [s["id"] for s in child["states"] if s["id"] not in gone_states(child)]
+        if not_gone:
+            out.append({
+                "id": f"rel{r['id']}", "derived": True, "severity": "error",
+                "name": t("r.derived.name", **names), "description": t("r.derived.desc", **names),
+                "rules": [{"entity_id": parent["id"], "state_ids": gone_states(parent), "negate": 0},
+                          {"entity_id": child["id"], "state_ids": not_gone, "negate": 0}],
+            })
+        if off_states(parent) and active_states(child):
+            out.append({
+                "id": f"rel{r['id']}off", "derived": True, "severity": "error",
+                "name": t("r.derived_off.name", **names), "description": t("r.derived_off.desc", **names),
+                "rules": [{"entity_id": parent["id"], "state_ids": off_states(parent), "negate": 0},
+                          {"entity_id": child["id"], "state_ids": active_states(child), "negate": 0}],
+            })
     return out
 
 
@@ -214,15 +232,16 @@ def relation_issues(model: dict, sname, t=None) -> list[dict]:
                 add("warning", "composition", t("r.create_without_parent.title", action=c["action"], child=C, parent=P),
                     t("r.create_without_parent.detail", child=C, parent=P),
                     entity_id=child["id"], transition_id=c["id"], relation_id=r["id"])
-        gone = set(gone_states(parent)) - {NONE}
+        # le azioni che eliminano o spengono il padre devono occuparsi dei figli
+        gone, off = set(gone_states(parent)) - {NONE}, set(off_states(parent))
         for x in parent["transitions"]:
-            if is_create(x) or x["to_state_id"] not in gone:
+            key = "r.parent_leaves" if x["to_state_id"] in gone else "r.parent_off" if x["to_state_id"] in off else None
+            if is_create(x) or not key or any(f["entity_id"] == child["id"] for f in x["effects"]):
                 continue
-            if not any(f["entity_id"] == child["id"] for f in x["effects"]):
-                st = sname(x["to_state_id"])
-                add("warning", "composition", t("r.parent_leaves.title", action=x["action"], parent=P, state=st, child=C),
-                    t("r.parent_leaves.detail", state=st, child=C),
-                    entity_id=parent["id"], transition_id=x["id"], relation_id=r["id"])
+            st = sname(x["to_state_id"])
+            add("warning", "composition", t(f"{key}.title", action=x["action"], parent=P, state=st, child=C),
+                t(f"{key}.detail", state=st, child=C, parent=P),
+                entity_id=parent["id"], transition_id=x["id"], relation_id=r["id"])
 
     # --- coerenza tra relazioni e regole ---
     linked = {}  # coppia non ordinata -> tipo di regola che lega le due entità
