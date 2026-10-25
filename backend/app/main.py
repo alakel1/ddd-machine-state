@@ -52,6 +52,8 @@ def model_payload(conn, domain_id: int, lang: str) -> dict:
         for t in e["transitions"]:
             # stati da cui l'azione parte davvero ("da qualsiasi" = ogni stato non finale diverso dall'arrivo)
             t["from_states"] = [] if is_create(t) else [s["id"] for s in e["states"] if eng.applies_from(t, s["id"])]
+            for g in t["guards"]:
+                g.pop("each", None)  # forma interna del motore per le guardie "per ogni"
     m["derived_invariants"] = derived_invariants(m, eng.t)  # sola lettura: nascono dalle composizioni
     return m
 

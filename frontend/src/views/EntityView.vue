@@ -125,7 +125,7 @@ const fromSel = computed({
 function addGuard(kind) {
   draft.value.guards.push(kind === 'rule'
     ? { kind: 'rule', description: '', state_ids: [], negate: 0, entity_id: null }
-    : { kind: 'state', entity_id: others.value[0]?.id ?? e.value.id, state_ids: [], negate: 0, description: '' })
+    : { kind: 'state', entity_id: others.value[0]?.id ?? e.value.id, state_ids: [], negate: 0, description: '', each_entity_id: null })
 }
 function addEffect() {
   const target = others.value[0]
@@ -256,7 +256,17 @@ function cell(stateId, action) {
 }
 
 const guardText = (g) =>
-  g.kind === 'rule' ? g.description : `${ename(g.entity_id)} ${g.negate ? '∉' : '∈'} {${g.state_ids.map(sname).join(', ')}}`
+  g.kind === 'rule'
+    ? g.description
+    : `${ename(g.entity_id)} ${g.negate ? '∉' : '∈'} {${g.state_ids.map(sname).join(', ')}}` +
+      (g.each_entity_id ? `, ${t('entity.eachText', { entity: ename(g.each_entity_id) })}` : '')
+// padri dell'entità nelle composizioni: una guardia può valere "per ogni padre" (ogni Modello ha almeno una Fase…)
+const parentsOf = (eid) =>
+  m.value.relations.filter((r) => r.composition && r.target_id === eid && r.source_id !== eid).map((r) => entity(r.source_id)).filter(Boolean)
+function changeGuardEntity(g) {
+  g.state_ids = []
+  if (!parentsOf(g.entity_id).some((p) => p.id === g.each_entity_id)) g.each_entity_id = null
+}
 </script>
 
 <template>
@@ -698,7 +708,7 @@ const guardText = (g) =>
             <div v-for="(g, i) in draft.guards" :key="i" class="rounded-xl ring-1 ring-zinc-200 p-3 bg-zinc-50/50">
               <div v-if="g.kind === 'state'" class="space-y-2.5">
                 <div class="flex items-center gap-2">
-                  <select v-model="g.entity_id" class="input !w-44 !py-1.5" @change="g.state_ids = []">
+                  <select v-model="g.entity_id" class="input !w-44 !py-1.5" @change="changeGuardEntity(g)">
                     <option v-for="x in m.entities" :key="x.id" :value="x.id">{{ x.name }}</option>
                   </select>
                   <select v-model="g.negate" class="input !w-40 !py-1.5">
@@ -709,6 +719,14 @@ const guardText = (g) =>
                   <button type="button" class="icon-btn hover:!text-rose-600" @click="draft.guards.splice(i, 1)"><i class="fa-solid fa-xmark fa-fw text-[14px]" /></button>
                 </div>
                 <StatePicker v-model="g.state_ids" :entity-id="g.entity_id" />
+                <!-- quantificatore: per ogni istanza del padre in composizione -->
+                <div v-if="parentsOf(g.entity_id).length" class="flex items-center gap-2 flex-wrap text-xs text-zinc-500">
+                  <select v-model="g.each_entity_id" class="input !w-auto !py-1 !text-xs">
+                    <option :value="null">{{ $t('entity.eachNone', { entity: ename(g.entity_id) }) }}</option>
+                    <option v-for="p in parentsOf(g.entity_id)" :key="p.id" :value="p.id">{{ $t('entity.eachOption', { parent: p.name }) }}</option>
+                  </select>
+                  <span v-if="g.each_entity_id">{{ $t(g.negate ? 'entity.eachHintNot' : 'entity.eachHint', { parent: ename(g.each_entity_id), entity: ename(g.entity_id) }) }}</span>
+                </div>
               </div>
               <div v-else class="flex items-center gap-2">
                 <i class="fa-solid fa-flag fa-fw text-[14px] text-sky-500 shrink-0" />

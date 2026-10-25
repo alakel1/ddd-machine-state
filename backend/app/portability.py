@@ -43,7 +43,8 @@ def import_model(conn, m: dict, default_name: str = "") -> int:
                     "transition_id": T[t["id"]], "kind": g.get("kind", "state"),
                     "entity_id": E.get(g.get("entity_id")),
                     "state_ids": [S[x] for x in g.get("state_ids", []) if x in S],
-                    "negate": g.get("negate", 0), "description": g.get("description", "")})
+                    "negate": g.get("negate", 0), "description": g.get("description", ""),
+                    "each_entity_id": E.get(g.get("each_entity_id"))})
             for f in t.get("effects", []):
                 db.insert(conn, "effects", {
                     "transition_id": T[t["id"]], "entity_id": E[f["entity_id"]], "kind": f.get("kind", "state"), "action": f.get("action", ""), "skip_final": f.get("skip_final", 0),
@@ -112,7 +113,8 @@ def export_markdown(m: dict, lang: str | None = None) -> str:
                         gs.append(t("md.rule", text=g["description"]))
                     else:
                         op = "∉" if g["negate"] else "∈"
-                        gs.append(f"{en(g['entity_id'])} {op} {{{', '.join(sn(x) for x in g['state_ids'])}}}")
+                        gs.append(f"{en(g['entity_id'])} {op} {{{', '.join(sn(x) for x in g['state_ids'])}}}"
+                                  + (f" {t('md.each', entity=en(g['each_entity_id']))}" if g.get("each_entity_id") else ""))
                 fx = [f"{en(f['entity_id'])} → " + (t("md.created") if f.get("kind") == "create"
                                                    else t("md.runs", action=f.get("action")) if f.get("kind") == "action"
                                                    else sn(f["to_state_id"]))

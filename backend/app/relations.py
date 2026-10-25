@@ -160,10 +160,18 @@ def expand(model: dict, tr=None) -> tuple[dict, dict]:
             return [_vid(ref_id, ctx_index)]
         return [_vid(ref_id, i) for i in range(1, k + 1)]
 
+    original = {e["id"]: e for e in model["entities"]}
     for e in m["entities"]:
         ctx = owner_index.get(e["id"])
         for t in e["transitions"]:
             for g in t["guards"]:
+                parent = original.get(g.get("each_entity_id")) if g.get("kind") == "state" else None
+                if parent and parent["states"] and g.get("entity_id") is not None:
+                    # "per ogni padre": ogni copia del padre con i figli della stessa istanza
+                    g["each"] = [[pv, gone_states(parent), targets(g["entity_id"], owner_index.get(pv) or ctx)]
+                                 for pv in targets(parent["id"], ctx)]
+                    g["entity_id"] = g["each"][0][2][0]
+                    continue
                 if g.get("kind") == "state" and g.get("entity_id") in counts:
                     ids = targets(g["entity_id"], ctx)
                     g["entity_id"] = ids[0]

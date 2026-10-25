@@ -64,6 +64,8 @@ CREATE TABLE IF NOT EXISTS transitions (
 );
 
 -- kind=state: l'entità entity_id deve (negate=0) / non deve (negate=1) trovarsi in uno di state_ids
+--             con each_entity_id: vale per ogni istanza esistente di quell'entità (il padre in una composizione),
+--             che deve avere almeno un figlio entity_id in state_ids (con negate: nessuno)
 -- kind=rule : regola di business testuale, non verificabile automaticamente
 CREATE TABLE IF NOT EXISTS guards (
     id INTEGER PRIMARY KEY,
@@ -72,7 +74,8 @@ CREATE TABLE IF NOT EXISTS guards (
     entity_id INTEGER REFERENCES entities(id) ON DELETE CASCADE,
     state_ids TEXT NOT NULL DEFAULT '[]',
     negate INTEGER NOT NULL DEFAULT 0,
-    description TEXT NOT NULL DEFAULT ''
+    description TEXT NOT NULL DEFAULT '',
+    each_entity_id INTEGER REFERENCES entities(id) ON DELETE SET NULL
 );
 
 -- effetto collaterale, quando scatta la transizione:
@@ -132,7 +135,7 @@ TABLES = {
     "attributes": {"fields": ["entity_id", "name", "type", "required", "description"], "json": []},
     "states": {"fields": ["entity_id", "name", "description", "is_initial", "is_final", "liveness", "pos"], "json": []},
     "transitions": {"fields": ["entity_id", "kind", "cascade_only", "from_state_id", "to_state_id", "action", "actor", "description"], "json": []},
-    "guards": {"fields": ["transition_id", "kind", "entity_id", "state_ids", "negate", "description"], "json": ["state_ids"]},
+    "guards": {"fields": ["transition_id", "kind", "entity_id", "state_ids", "negate", "description", "each_entity_id"], "json": ["state_ids"]},
     "effects": {"fields": ["transition_id", "entity_id", "kind", "to_state_id", "action", "skip_final", "description"], "json": []},
     "relations": {"fields": ["domain_id", "source_id", "target_id", "cardinality", "label", "composition", "instances"],
                   "json": []},
@@ -198,6 +201,7 @@ MIGRATIONS = [
     ("relations", "instances", "ALTER TABLE relations ADD COLUMN instances INTEGER NOT NULL DEFAULT 1"),
     ("effects", "skip_final", "ALTER TABLE effects ADD COLUMN skip_final INTEGER NOT NULL DEFAULT 0"),
     ("states", "liveness", _states_liveness),
+    ("guards", "each_entity_id", "ALTER TABLE guards ADD COLUMN each_entity_id INTEGER REFERENCES entities(id) ON DELETE SET NULL"),
 ]
 
 

@@ -16,7 +16,7 @@ from collections import OrderedDict, deque
 from operator import itemgetter
 
 from .i18n import translator
-from .relations import derived_invariants, expand, relation_issues
+from .relations import derived_invariants, expand, gone_states, relation_issues
 
 NONE = 0  # stato implicito "non esiste" (gli id SQLite partono da 1)
 MAX_CASCADE_DEPTH = 8
@@ -46,8 +46,16 @@ class Engine:
         # forme precompilate per i percorsi caldi dell'esplorazione
         self._inv_fast = [(inv, [(r["entity_id"], frozenset(r.get("state_ids", [])), bool(r.get("negate")),
                                   tuple(r.get("entity_ids") or ())) for r in inv["rules"]]) for inv in self.invariants]
+        # guardie "per ogni padre": each = [(padre, stati in cui il padre non c'è, figli da controllare)];
+        # il modello espanso le ha già, abbinate per istanza
+        for t in self.transitions:
+            for g in t["guards"]:
+                if g["kind"] == "state" and g.get("each_entity_id") and "each" not in g:
+                    p = self.entity.get(g["each_entity_id"])
+                    g["each"] = [[p["id"], gone_states(p), [g["entity_id"]]]] if p and p["states"] else None
         self._guards_fast = {
-            t["id"]: [(g["entity_id"], tuple(g.get("entity_ids") or ()), frozenset(g["state_ids"]), bool(g["negate"]))
+            t["id"]: [(g["entity_id"], tuple(g.get("entity_ids") or ()), frozenset(g["state_ids"]), bool(g["negate"]),
+                       tuple((pid, frozenset(gone), tuple(kids)) for pid, gone, kids in g.get("each") or ()))
                       for g in t["guards"] if g["kind"] == "state" and g.get("entity_id") is not None]
             for t in self.transitions}
         # invarianti sulla chiave di stato (tupla): regole come (posizioni, stati, negate),
@@ -140,6 +148,18 @@ class Engine:
     def guard_failures(self, t: dict, state: dict) -> list[str]:
         fails = []
         for g in t["guards"]:
+            if g["kind"] == "state" and g.get("each"):
+                names = ", ".join(self.sname(s) for s in g["state_ids"]) or "—"
+                for pid, gone, kids in g["each"]:
+                    cur = [state.get(x, NONE) for x in kids]
+                    if state.get(pid, NONE) in gone or any(s in g["state_ids"] for s in cur) != bool(g["negate"]):
+                        continue
+                    fails.append(
+                        self.t("guard.fail_each_not" if g["negate"] else "guard.fail_each", parent=self.ename(pid),
+                               entity=self.ename(kids[0]), states=names, current=", ".join(self.sname(s) for s in cur))
+                        + (f" — {g['description']}" if g["description"] else "")
+                    )
+                continue
             if g["kind"] != "state" or g["entity_id"] not in state:
                 continue
             check = lambda s: (s not in g["state_ids"]) if g["negate"] else (s in g["state_ids"])
@@ -164,7 +184,13 @@ class Engine:
 
     def guards_ok(self, t: dict, state: dict) -> bool:
         """Come guard_failures, ma solo sì/no: senza costruire messaggi (usata nell'esplorazione)."""
-        for eid, many, ids, neg in self._guards_fast[t["id"]]:
+        for eid, many, ids, neg, each in self._guards_fast[t["id"]]:
+            if each:
+                # per ogni padre esistente: almeno un suo figlio negli stati (con negate: nessuno)
+                for pid, gone, kids in each:
+                    if state.get(pid, NONE) not in gone and any(state.get(x, NONE) in ids for x in kids) == neg:
+                        return False
+                continue
             if eid not in state:
                 continue
             if many:
@@ -466,6 +492,8 @@ class Engine:
             for g in x["guards"]:
                 if g["kind"] == "state" and g.get("entity_id") is not None:
                     ents.update((g["entity_id"], *(g.get("entity_ids") or ())))
+                    for pid, _, kids in g.get("each") or ():
+                        ents.update((pid, *kids))
             for f in x["effects"]:
                 ents.add(f["entity_id"])
                 stack.extend(self.entity[f["entity_id"]]["transitions"])
@@ -581,7 +609,7 @@ class Engine:
     def _guard_sig(self, g: dict):
         if g["kind"] == "rule":
             return ("rule", g["description"].strip().lower())
-        return ("state", g["entity_id"], tuple(sorted(g["state_ids"])), bool(g["negate"]))
+        return ("state", g["entity_id"], tuple(sorted(g["state_ids"])), bool(g["negate"]), g.get("each_entity_id"))
 
     def _guard_text(self, g: dict) -> str:
         """Guardia in forma leggibile: "Procedura in CREATA, INDETTA o COMPILATA"."""
@@ -589,7 +617,8 @@ class Engine:
             return self.t("q", x=g["description"])
         names = [self.sname(s) for s in g["state_ids"]]
         states = names[0] if len(names) == 1 else f"{', '.join(names[:-1])} {self.t('or')} {names[-1]}"
-        return self.t("guard.text_not_in" if g["negate"] else "guard.text_in", entity=self.ename(g["entity_id"]), states=states)
+        text = self.t("guard.text_not_in" if g["negate"] else "guard.text_in", entity=self.ename(g["entity_id"]), states=states)
+        return self.t("guard.text_each", text=text, each=self.ename(g["each_entity_id"])) if g.get("each_entity_id") else text
 
     def _broken(self, ref: dict) -> bool:
         """Guardia o condizione che cita uno stato eliminato dal modello (o di un'altra entità)."""
@@ -609,7 +638,7 @@ class Engine:
     def _covers(self, own: dict, req: dict) -> bool:
         """La guardia own è almeno severa quanto req (es. Procedura ∈ {A, B} copre Procedura ∈ {A, B, C})."""
         if own["kind"] != "state" or req["kind"] != "state" or own["entity_id"] != req["entity_id"] \
-                or bool(own["negate"]) != bool(req["negate"]):
+                or bool(own["negate"]) != bool(req["negate"]) or own.get("each_entity_id") != req.get("each_entity_id"):
             return self._guard_sig(own) == self._guard_sig(req)
         a, b = set(own["state_ids"]), set(req["state_ids"])
         return a >= b if own["negate"] else a <= b
