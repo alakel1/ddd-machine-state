@@ -20,7 +20,7 @@ from .relations import derived_invariants, expand, gone_states, relation_issues
 
 NONE = 0  # stato implicito "non esiste" (gli id SQLite partono da 1)
 MAX_CASCADE_DEPTH = 8
-DEFAULT_EXPLORE_LIMIT = 300_000
+DEFAULT_EXPLORE_LIMIT = 1_000_000
 _EXPLORE_CACHE: "OrderedDict[tuple, dict]" = OrderedDict()  # esplorazioni recenti, per modello e limite
 _EXPLORE_CACHE_SIZE = 6
 _EXPLORE_LOCK = threading.Lock()  # richieste parallele sullo stesso modello aspettano il primo calcolo

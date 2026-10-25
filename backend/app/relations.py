@@ -124,6 +124,16 @@ def expand(model: dict, tr=None) -> tuple[dict, dict]:
         n = max(1, min(3, int(r.get("instances") or 1)))
         if n > 1:
             counts[r["target_id"]] = max(counts.get(r["target_id"], 1), n)
+    # le istanze sono "per ogni padre": se il padre ha più copie, ogni copia ha i suoi figli
+    # (altrimenti un figlio singolo finirebbe condiviso tra le copie del padre)
+    changed = True
+    while changed:
+        changed = False
+        for r in compositions(model):
+            n = counts.get(r["source_id"], 1)
+            if r["target_id"] != r["source_id"] and n > counts.get(r["target_id"], 1):
+                counts[r["target_id"]] = n
+                changed = True
     if not counts:
         return model, {}
 

@@ -28,7 +28,7 @@ Set any combination of states, even ones that "shouldn't happen", and see which 
 ![Simulator](docs/screenshots/simulator.png)
 
 ### Edge case analysis
-A breadth-first model checker over the global state space (up to 300,000 combinations, cached until the model changes). It reports:
+A breadth-first model checker over the global state space (up to 1,000,000 combinations, cached until the model changes). It reports:
 
 - **Violable invariants**: a sequence of actions reaches a forbidden combination
 - **Blocked cascades**: a cascade asks an entity for a transition it can't make, with a suggested fix
