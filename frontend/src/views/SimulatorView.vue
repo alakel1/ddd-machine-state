@@ -273,7 +273,7 @@ watch(locale, () => evaluation.value && evaluate())
             <option v-for="e in ents" :key="e.id" :value="e.id">{{ e.name }}</option>
           </select>
         </div>
-        <div class="p-3"><Mermaid :code="diagram" /></div>
+        <div class="p-3"><Mermaid :code="diagram" :name="`${focusEntity?.name} ${$t('sim.title')}`" /></div>
       </section>
 
       <section class="card">

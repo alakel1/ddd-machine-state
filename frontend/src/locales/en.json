@@ -59,7 +59,9 @@
     "unavailable": "Not from this state"
   },
   "mermaid": {
-    "empty": "No states to draw"
+    "empty": "No states to draw",
+    "exportPng": "Download the diagram as PNG",
+    "exportError": "PNG export failed"
   },
   "picker": {
     "chooseEntity": "Choose an entity"
@@ -138,7 +140,20 @@
       "manyToMany": "Several {a} are linked to several {b}."
     },
     "livenessEdit": "edit in the entity page",
-    "livenessRule": "When the parent is turned off, its children cannot stay active; when it is deleted, they must disappear."
+    "livenessRule": "When the parent is turned off, its children cannot stay active; when it is deleted, they must disappear.",
+    "states": {
+      "title": "State diagram",
+      "allContexts": "All contexts",
+      "guards": "guards",
+      "overlay": "analysis findings",
+      "draft": "Draft",
+      "openErrors": "{n} open error in the analysis | {n} open errors in the analysis",
+      "at": "(analysis at {time})",
+      "clean": "No open errors in the analysis: the diagram describes a consistent model.",
+      "transition": "transition",
+      "inError": "in error",
+      "never": "never reached / never executable"
+    }
   },
   "inv": {
     "eyebrow": "Domain rules",

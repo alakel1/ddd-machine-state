@@ -474,6 +474,11 @@ class Engine:
         states = names[0] if len(names) == 1 else f"{', '.join(names[:-1])} {self.t('or')} {names[-1]}"
         return self.t("guard.text_not_in" if g["negate"] else "guard.text_in", entity=self.ename(g["entity_id"]), states=states)
 
+    def _broken(self, ref: dict) -> bool:
+        """Guardia o condizione che cita uno stato eliminato dal modello (o di un'altra entità)."""
+        return any(sid != NONE and (sid not in self.state or self.state[sid]["entity_id"] != ref["entity_id"])
+                   for sid in ref.get("state_ids", []))
+
     def _local_reach(self, eid, sid) -> set:
         """Stati dell'entità raggiungibili da sid con le sue sole transizioni, ignorando le guardie."""
         seen, stack = set(), [sid]
@@ -584,10 +589,15 @@ class Engine:
                         add("error", "guards", "a.empty_guard", params=p, entity_id=e["id"], transition_id=t["id"])
                     if g["kind"] == "state" and g["entity_id"] == e["id"]:
                         add("info", "guards", "a.self_guard", params=p, entity_id=e["id"], transition_id=t["id"])
+                    if g["kind"] == "state" and self._broken(g):
+                        add("error", "guards", "a.broken_guard", params={**p, "target": self.ename(g["entity_id"])},
+                            entity_id=e["id"], transition_id=t["id"])
 
         for inv in self.invariants:
             if not inv["rules"]:
                 add("warning", "invariants", "a.empty_invariant", detail="", params={"name": inv["name"]}, invariant_id=inv["id"])
+            if any(self._broken(r) for r in inv["rules"]):
+                add("error", "invariants", "a.broken_invariant", params={"name": inv["name"]}, invariant_id=inv["id"])
 
         issues += relation_issues(self.model, self.sname, T)
 

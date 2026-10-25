@@ -1,20 +1,43 @@
 <script setup>
-import { computed, ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { computed, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { store, api, reloadModel, loadDomains, ename } from '../store'
 import { pal, COLORS } from '../colors'
-import { t } from '../i18n'
-import { contextMap } from '../diagrams'
+import { t, locale } from '../i18n'
+import { contextMap, domainStateMap } from '../diagrams'
 import PageHeader from '../components/PageHeader.vue'
 import Modal from '../components/Modal.vue'
 import Mermaid from '../components/Mermaid.vue'
 import StateChip from '../components/StateChip.vue'
 import RelationModal from '../components/RelationModal.vue'
 
+const route = useRoute()
 const router = useRouter()
 const m = computed(() => store.model)
 const showDeps = ref(true)
 const diagram = computed(() => contextMap(m.value, { dependencies: showDeps.value }))
+
+// ---------- tab del diagramma: context map (default) | stati di tutto il dominio, nell'URL ----------
+const setQuery = (patch) => router.replace({ query: { ...route.query, ...patch } })
+const view = computed(() => (route.query.view === 'states' ? 'states' : 'map'))
+const stateCtx = computed(() => route.query.ctx ?? null) // null = tutti i contesti
+const stateOpts = computed(() => ({
+  effects: route.query.effects !== '0', guards: route.query.guards === '1', overlay: route.query.overlay !== '0',
+}))
+const contextNames = computed(() => [...new Set(m.value.entities.filter((e) => e.states.length).map((e) => e.context || ''))])
+// le segnalazioni dell'analisi sul diagramma: si ricaricano quando cambia il modello
+const analysis = ref(null)
+async function loadAnalysis() {
+  if (view.value !== 'states' || !stateOpts.value.overlay) return
+  const res = await api.get(`/domains/${m.value.id}/analysis`)
+  analysis.value = { issues: res.issues, at: new Date() }
+}
+watch([view, () => stateOpts.value.overlay, m, locale], loadAnalysis, { immediate: true })
+const openErrors = computed(() => analysis.value?.issues.filter((i) => i.severity === 'error').length ?? 0)
+const stateDiagram = computed(() => domainStateMap(m.value, {
+  context: stateCtx.value, effects: stateOpts.value.effects, guards: stateOpts.value.guards,
+  issues: stateOpts.value.overlay ? analysis.value?.issues : null,
+}))
 const editingDomain = ref(null)
 const relation = ref(null)
 
@@ -87,14 +110,19 @@ async function removeRelation(r) {
       </div>
     </div>
 
-    <!-- Context map -->
+    <!-- Context map | diagramma degli stati del dominio -->
     <section class="card overflow-hidden">
-      <div class="flex items-center justify-between px-6 py-4 border-b border-zinc-100">
-        <div class="flex items-center gap-2.5">
-          <i class="fa-solid fa-diagram-project fa-fw text-[14px] text-zinc-400" />
-          <h2 class="font-semibold tracking-tight">{{ $t('model.contextMap') }}</h2>
-        </div>
-        <div class="flex items-center gap-4 text-xs text-zinc-500">
+      <div class="flex flex-wrap items-center justify-between gap-3 px-6 border-b border-zinc-100">
+        <nav class="flex gap-5">
+          <button v-for="v in ['map', 'states']" :key="v" @click="setQuery({ view: v === 'states' ? 'states' : undefined })"
+                  class="relative py-4 text-sm transition cursor-pointer flex items-center gap-2"
+                  :class="view === v ? 'text-zinc-900 font-semibold' : 'text-zinc-500 hover:text-zinc-800'">
+            <i class="fa-solid fa-fw text-[13px] opacity-70" :class="v === 'map' ? 'fa-diagram-project' : 'fa-circle-nodes'" />
+            {{ $t(v === 'map' ? 'model.contextMap' : 'model.states.title') }}
+            <span v-if="view === v" class="absolute inset-x-0 -bottom-px h-0.5 rounded-full bg-indigo-600" />
+          </button>
+        </nav>
+        <div v-if="view === 'map'" class="flex items-center gap-4 text-xs text-zinc-500">
           <span class="flex items-center gap-1.5"><span class="w-5 border-t border-zinc-500" /> {{ $t('model.legend.relation') }}</span>
           <span class="flex items-center gap-1.5"><span class="w-5 border-t border-dashed border-zinc-400" /> {{ $t('model.legend.dependsOn') }}</span>
           <span class="flex items-center gap-1.5"><span class="w-5 border-t-2 border-amber-500" /> {{ $t('model.legend.effect') }}</span>
@@ -102,9 +130,54 @@ async function removeRelation(r) {
             <input v-model="showDeps" type="checkbox" class="accent-indigo-600" /> {{ $t('model.legend.stateDeps') }}
           </label>
         </div>
+        <div v-else class="flex flex-wrap items-center gap-4 text-xs text-zinc-500 py-2">
+          <select :value="stateCtx ?? '*'" @change="(ev) => setQuery({ ctx: ev.target.value === '*' ? undefined : ev.target.value })"
+                  class="input !w-auto !py-1 !text-xs">
+            <option value="*">{{ $t('model.states.allContexts') }}</option>
+            <option v-for="c in contextNames" :key="c" :value="c">{{ c || $t('model.noContext') }}</option>
+          </select>
+          <label class="flex items-center gap-1.5 cursor-pointer">
+            <input type="checkbox" class="accent-indigo-600" :checked="stateOpts.effects" @change="(ev) => setQuery({ effects: ev.target.checked ? undefined : '0' })" />
+            {{ $t('model.legend.effect') }}
+          </label>
+          <label class="flex items-center gap-1.5 cursor-pointer">
+            <input type="checkbox" class="accent-indigo-600" :checked="stateOpts.guards" @change="(ev) => setQuery({ guards: ev.target.checked ? '1' : undefined })" />
+            {{ $t('model.states.guards') }}
+          </label>
+          <label class="flex items-center gap-1.5 cursor-pointer pl-3 border-l border-zinc-200">
+            <input type="checkbox" class="accent-indigo-600" :checked="stateOpts.overlay" @change="(ev) => setQuery({ overlay: ev.target.checked ? undefined : '0' })" />
+            {{ $t('model.states.overlay') }}
+          </label>
+        </div>
       </div>
-      <div class="p-6 bg-[radial-gradient(circle_at_1px_1px,#e4e4e7_1px,transparent_0)] [background-size:18px_18px]">
-        <Mermaid :code="diagram" clickable @entity-click="(id) => router.push(`/d/${m.id}/entity/${id}`)" />
+
+      <template v-if="view === 'states'">
+        <!-- stato di maturità: il diagramma non va preso per una specifica finché l'analisi ha errori aperti -->
+        <div v-if="stateOpts.overlay && analysis" class="flex items-center gap-2 px-6 py-2.5 text-xs border-b"
+             :class="openErrors ? 'bg-amber-50 text-amber-900 border-amber-100' : 'bg-emerald-50 text-emerald-800 border-emerald-100'">
+          <i class="fa-solid fa-fw" :class="openErrors ? 'fa-triangle-exclamation' : 'fa-circle-check'" />
+          <span v-if="openErrors">
+            <b>{{ $t('model.states.draft') }}</b> · {{ $t('model.states.openErrors', openErrors) }}
+            {{ $t('model.states.at', { time: analysis.at.toLocaleTimeString(locale, { hour: '2-digit', minute: '2-digit' }) }) }}
+          </span>
+          <span v-else>{{ $t('model.states.clean') }}</span>
+          <RouterLink :to="`/d/${m.id}/analysis`" class="ml-auto font-medium hover:underline">{{ $t('nav.analysis') }} →</RouterLink>
+        </div>
+        <div class="flex flex-wrap items-center gap-4 px-6 py-2.5 border-b border-zinc-100 text-xs text-zinc-500">
+          <span class="flex items-center gap-1.5"><span class="w-5 border-t border-zinc-500" /> {{ $t('model.states.transition') }}</span>
+          <span v-if="stateOpts.effects" class="flex items-center gap-1.5"><span class="w-5 border-t-2 border-dashed border-amber-500" /> {{ $t('model.legend.effect') }}</span>
+          <span v-if="stateOpts.guards" class="flex items-center gap-1.5"><span class="w-5 border-t border-dashed border-zinc-400" /> {{ $t('model.states.guards') }}</span>
+          <template v-if="stateOpts.overlay">
+            <span class="flex items-center gap-1.5"><span class="w-5 border-t-2 border-rose-600" /> {{ $t('model.states.inError') }}</span>
+            <span class="flex items-center gap-1.5"><span class="w-5 border-t border-dashed border-zinc-400" /> {{ $t('model.states.never') }}</span>
+          </template>
+        </div>
+        <div class="p-6 bg-[radial-gradient(circle_at_1px_1px,#e4e4e7_1px,transparent_0)] [background-size:18px_18px]">
+          <Mermaid :code="stateDiagram" natural :name="`${m.name} ${$t('model.states.title')}${stateCtx ? ` ${stateCtx}` : ''}`" />
+        </div>
+      </template>
+      <div v-else class="p-6 bg-[radial-gradient(circle_at_1px_1px,#e4e4e7_1px,transparent_0)] [background-size:18px_18px]">
+        <Mermaid :code="diagram" clickable :name="`${m.name} ${$t('model.contextMap')}`" @entity-click="(id) => router.push(`/d/${m.id}/entity/${id}`)" />
       </div>
     </section>
 

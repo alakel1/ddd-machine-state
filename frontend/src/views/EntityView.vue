@@ -310,7 +310,7 @@ const guardText = (g) =>
           <span class="ml-auto">{{ $t('entity.map.count', { n: mapCount, total: m.entities.length }) }}</span>
         </div>
         <div class="p-6 bg-[radial-gradient(circle_at_1px_1px,#e4e4e7_1px,transparent_0)] [background-size:18px_18px]">
-          <Mermaid :code="relMap" clickable @entity-click="openFromMap" />
+          <Mermaid :code="relMap" clickable :name="`${e.name} ${$t('entity.map.title')} ${depth ?? $t('entity.map.all')}`" @entity-click="openFromMap" />
           <p v-if="mapCount === 1" class="text-center text-sm text-zinc-400 py-6">{{ $t('entity.map.alone', { name: e.name }) }}</p>
         </div>
       </section>
@@ -520,7 +520,7 @@ const guardText = (g) =>
             <span class="ml-auto text-[11px] text-zinc-400"><i class="fa-solid fa-lock" /> {{ $t('entity.legend.guard') }} · <i class="fa-solid fa-bolt" /> {{ $t('entity.legend.effect') }} · <i class="fa-solid fa-arrows-turn-right" /> {{ $t('entity.legend.cascade') }}</span>
           </div>
           <div class="p-4 bg-[radial-gradient(circle_at_1px_1px,#e4e4e7_1px,transparent_0)] [background-size:16px_16px]">
-            <Mermaid :code="diagram" />
+            <Mermaid :code="diagram" :name="`${e.name} ${$t('entity.diagram')}`" />
           </div>
 
           <div class="border-t border-zinc-100">

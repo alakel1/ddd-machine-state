@@ -28,6 +28,7 @@
 @utility tag { @apply inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] font-medium ring-1 ring-inset whitespace-nowrap; }
 
 .mermaid-host svg { max-width: 100%; height: auto; }
+.mermaid-host.natural svg { max-width: none; flex-shrink: 0; margin: 0 auto; }
 .mermaid-host.clickable-nodes .node { cursor: pointer; }
 .mermaid-host.clickable-nodes .node:hover { filter: brightness(0.96); }
 .mermaid-host .edgeLabel, .mermaid-host .edgeLabel p { background: #fff !important; font-size: 11px; color: #52525b; }

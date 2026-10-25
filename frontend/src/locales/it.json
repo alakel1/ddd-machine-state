@@ -59,7 +59,9 @@
     "unavailable": "Non dallo stato"
   },
   "mermaid": {
-    "empty": "Nessuno stato da disegnare"
+    "empty": "Nessuno stato da disegnare",
+    "exportPng": "Scarica il diagramma come PNG",
+    "exportError": "Esportazione PNG non riuscita"
   },
   "picker": {
     "chooseEntity": "Scegli un'entità"
@@ -138,7 +140,20 @@
       "manyToMany": "Più {a} sono legati a più {b}."
     },
     "livenessEdit": "modifica nella scheda",
-    "livenessRule": "Quando il padre si spegne, i figli non possono restare attivi; quando viene eliminato, devono sparire."
+    "livenessRule": "Quando il padre si spegne, i figli non possono restare attivi; quando viene eliminato, devono sparire.",
+    "states": {
+      "title": "Diagramma degli stati",
+      "allContexts": "Tutti i contesti",
+      "guards": "guardie",
+      "overlay": "segnalazioni dell'analisi",
+      "draft": "Bozza",
+      "openErrors": "{n} errore aperto nell'analisi | {n} errori aperti nell'analisi",
+      "at": "(analisi delle {time})",
+      "clean": "Nessun errore aperto nell'analisi: il diagramma descrive un modello coerente.",
+      "transition": "transizione",
+      "inError": "in errore",
+      "never": "mai raggiunto / mai eseguibile"
+    }
   },
   "inv": {
     "eyebrow": "Regole del dominio",

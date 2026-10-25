@@ -136,3 +136,80 @@ export function contextMap(model, { dependencies = true, focus = null, depth = n
   Object.keys(groups).forEach((_, i) => L.push(`  style ctx${i} fill:#fafafa,stroke:#e4e4e7,color:#71717a`))
   return [...L, ...linkStyles].join('\n')
 }
+
+/**
+ * Diagramma degli stati del dominio: il ciclo di vita di ogni entità in un riquadro, con gli effetti
+ * a cascata (ed eventualmente le guardie) tra un'entità e l'altra. Con issues (risultati dell'analisi)
+ * marca in rosso le transizioni in errore e in grigio stati mai raggiunti e azioni mai eseguibili.
+ */
+export function domainStateMap(model, { context = null, effects = true, guards = false, issues = null } = {}) {
+  const ents = model?.entities.filter((e) => e.states.length && (context == null || (e.context || '') === context)) || []
+  if (!ents.length) return ''
+  const shown = new Set(ents.map((e) => e.id))
+  const states = new Set(ents.flatMap((e) => e.states.map((s) => s.id)))
+  const unreachable = new Set((issues || []).filter((i) => i.category === 'reachability' && i.state_id).map((i) => i.state_id))
+  const dead = new Set((issues || []).filter((i) => i.category === 'dead_actions').map((i) => i.transition_id))
+  const broken = new Set((issues || []).filter((i) => i.severity === 'error' && i.transition_id).map((i) => i.transition_id))
+
+  const L = ['flowchart LR']
+  const links = []
+  let idx = 0
+  const edge = (line, style) => {
+    L.push(line)
+    if (style) links.push(`  linkStyle ${idx} ${style}`)
+    idx++
+  }
+  const from = (e, tr) => (tr.kind === 'create' ? `n${e.id}` : tr.from_state_id ? `s${tr.from_state_id}` : `a${e.id}`)
+
+  for (const e of ents) {
+    const c = pal(e.color)
+    // nodi virtuali: "non esiste" per le entità con creazioni, "qualsiasi" per le azioni da ogni stato non finale
+    const virtual = [
+      e.transitions.some((tr) => tr.kind === 'create') && [`n${e.id}`, `(("${q(t('state.none'))}"))`],
+      e.transitions.some((tr) => tr.kind !== 'create' && !tr.from_state_id) && [`a${e.id}`, `{{"∗ ${q(t('state.any'))}"}}`],
+    ].filter(Boolean)
+    L.push(`  subgraph E${e.id}["${q(e.name)}${context == null && e.context ? ` · ${q(e.context)}` : ''}"]`)
+    L.push('    direction TB')
+    for (const [id, shape] of virtual) L.push(`    ${id}${shape}`)
+    for (const s of e.states) L.push(s.is_final ? `    s${s.id}(["${q(s.name)}"])` : `    s${s.id}["${q(s.name)}"]`)
+    L.push('  end')
+    L.push(`  style E${e.id} fill:#fafafa,stroke:${c.hex},stroke-width:1px,color:#3f3f46`)
+    for (const s of e.states)
+      L.push(unreachable.has(s.id)
+        ? `  style s${s.id} fill:#ffffff,stroke:#a1a1aa,stroke-dasharray:4 3,color:#a1a1aa`
+        : `  style s${s.id} fill:${c.bg},stroke:${c.hex},color:#18181b`)
+    for (const [id] of virtual) L.push(`  style ${id} fill:#ffffff,stroke:#d4d4d8,color:#a1a1aa`)
+  }
+  // transizioni (dentro ogni entità)
+  for (const e of ents)
+    for (const tr of e.transitions) {
+      const style = broken.has(tr.id) ? 'stroke:#e11d48,stroke-width:2.5px'
+        : dead.has(tr.id) ? 'stroke:#a1a1aa,stroke-dasharray:4 3' : null
+      edge(`  ${from(e, tr)} -->|"${q(tr.action)}"| s${tr.to_state_id}`, style)
+    }
+  // effetti a cascata: dallo stato in cui arriva l'azione allo stato (o all'entità) che deve reagire
+  if (effects)
+    for (const e of ents)
+      for (const tr of e.transitions)
+        for (const f of tr.effects) {
+          if (f.entity_id === e.id || !shown.has(f.entity_id)) continue
+          let dst = `E${f.entity_id}`
+          if (f.kind === 'state' && states.has(f.to_state_id)) dst = `s${f.to_state_id}`
+          if (f.kind === 'action') {
+            const to = [...new Set(model.entities.find((x) => x.id === f.entity_id).transitions.filter((x) => x.action === f.action).map((x) => x.to_state_id))]
+            if (to.length === 1) dst = `s${to[0]}`
+          }
+          edge(`  s${tr.to_state_id} -.->|"fa:fa-bolt ${q(tr.action)}"| ${dst}`,
+            broken.has(tr.id) ? 'stroke:#e11d48,stroke-width:2px' : 'stroke:#f59e0b,stroke-width:1.5px')
+        }
+  // guardie tra entità: dallo stato richiesto alla destinazione dell'azione che lo richiede
+  if (guards)
+    for (const e of ents)
+      for (const tr of e.transitions)
+        for (const g of tr.guards) {
+          if (g.kind !== 'state' || g.entity_id === e.id || !shown.has(g.entity_id) || g.negate) continue
+          for (const sid of g.state_ids)
+            if (states.has(sid)) edge(`  s${sid} -.->|"fa:fa-lock ${q(tr.action)}"| s${tr.to_state_id}`, 'stroke:#a1a1aa,stroke-width:1px')
+        }
+  return [...L, ...links].join('\n')
+}
