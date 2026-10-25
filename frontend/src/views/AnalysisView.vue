@@ -187,6 +187,13 @@ watch(locale, () => { run(); loadMatrix() })
                 </ul>
               </div>
             </div>
+            <!-- come si risolve, e su quale entità -->
+            <div v-if="i.conflict.fix" class="mt-3 pt-2.5 border-t border-zinc-200/70 flex items-start gap-2 text-sm text-indigo-800">
+              <i class="fa-solid fa-wrench fa-fw text-[11px] mt-[5px] shrink-0" />
+              <span class="flex-1">{{ i.conflict.fix.text }}</span>
+              <RouterLink v-if="i.conflict.fix.entity_id !== i.entity_id" :to="`/d/${m.id}/entity/${i.conflict.fix.entity_id}`"
+                          class="btn-ghost !text-xs !py-0.5 shrink-0">{{ $t('analysis.openEntity') }}</RouterLink>
+            </div>
           </div>
           <div v-if="i.state" class="mt-3">
             <div class="eyebrow mb-1.5">{{ $t('analysis.reachedState') }}</div>

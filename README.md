@@ -18,6 +18,8 @@ A context map of your entities grouped by bounded context, with declared relatio
 ### Entity editor
 Define states (initial, final; active, off or deleted), creation actions, transitions with guards and cascading effects, and the entity's relations with what each composition implies. A live state diagram, a *states × actions* table that exposes unhandled combinations, and a list of everyone who depends on the entity.
 
+The errors the analysis finds on the entity are shown right on top, each with what to fix and where: transitions that other entities' cascades need and the entity lacks can be added in one click.
+
 ![Entity editor](docs/screenshots/entity.png)
 
 ### Simulator
@@ -29,7 +31,8 @@ Set any combination of states, even ones that "shouldn't happen", and see which 
 A breadth-first model checker over the global state space (up to 300,000 combinations, cached until the model changes). It reports:
 
 - **Violable invariants**: a sequence of actions reaches a forbidden combination
-- **Effect conflicts**: a cascade asks an entity for a transition it can't make
+- **Blocked cascades**: a cascade asks an entity for a transition it can't make, with a suggested fix
+- **Missing transitions**: grouped per entity, with the actions that need them
 - **Deadlocks**: non-final entities with no enabled action
 - **Unreachable states** and **dead actions**
 - **Non-determinism**: the same action leading to different states

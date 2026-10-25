@@ -235,7 +235,7 @@
       "birth": "creation",
       "guards": "guards",
       "invariants": "invariants",
-      "effect_conflict": "effect conflict",
+      "effect_conflict": "blocked cascade",
       "missing_transition": "missing transitions",
       "deadlock": "deadlock",
       "dead_actions": "dead actions",
@@ -363,8 +363,7 @@
       "title": "One error on this entity | {n} errors on this entity",
       "hint": "From the edge case analysis: cases where the entity, or an action involving it, gets stuck.",
       "open": "View in analysis",
-      "fixHere": "Fix it here: turn on “{flag}” on this effect.",
-      "fixAt": "Fix it on {entity}: turn on “{flag}” on the effect."
+      "loading": "Computing edge cases…"
     },
     "missing": {
       "title": "One transition is missing | {n} transitions are missing",

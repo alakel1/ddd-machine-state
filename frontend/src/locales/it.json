@@ -235,7 +235,7 @@
       "birth": "nascita",
       "guards": "guardie",
       "invariants": "invarianti",
-      "effect_conflict": "conflitto effetti",
+      "effect_conflict": "cascata bloccata",
       "missing_transition": "transizioni mancanti",
       "deadlock": "deadlock",
       "dead_actions": "azioni morte",
@@ -363,8 +363,7 @@
       "title": "Un errore su questa entità | {n} errori su questa entità",
       "hint": "Dall'analisi degli edge case: casi in cui l'entità, o un'azione che la coinvolge, si blocca.",
       "open": "Vedi nell'analisi",
-      "fixHere": "Si sistema qui: attiva «{flag}» su questo effetto.",
-      "fixAt": "Si sistema su {entity}: attiva «{flag}» sull'effetto."
+      "loading": "Calcolo degli edge case in corso…"
     },
     "missing": {
       "title": "Manca una transizione | Mancano {n} transizioni",

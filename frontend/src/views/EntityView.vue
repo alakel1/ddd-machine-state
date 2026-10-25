@@ -1,7 +1,7 @@
 <script setup>
 import { computed, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { store, api, reloadModel, mutate, entity, ename, sname, stateById, toast, isCreatable, goneStates, offStates } from '../store'
+import { store, api, reloadModel, mutate, entity, ename, sname, toast, isCreatable, goneStates, offStates } from '../store'
 import { pal, KINDS, COLORS, PALETTE } from '../colors'
 import { t } from '../i18n'
 import { stateDiagram, contextMap, neighborhood } from '../diagrams'
@@ -200,11 +200,19 @@ const incoming = computed(() => {
 
 // ---------- errori dell'analisi che riguardano questa entità ----------
 const errors = ref([])
-watch(() => [m.value, e.value?.id], async () => {
-  const id = e.value?.id
+const analyzing = ref(false)
+let analysisRun = 0
+watch(() => [m.value, e.value?.id], async ([, id], old) => {
   if (!id) return
-  const { issues } = await api.get(`/domains/${m.value.id}/analysis`)
-  if (id === e.value?.id) errors.value = issues.filter((i) => i.severity === 'error' && i.entity_ids.includes(id))
+  if (id !== old?.[1]) errors.value = [] // cambiando entità non restano gli errori di quella di prima
+  const run = ++analysisRun
+  analyzing.value = true
+  try {
+    const { issues } = await api.get(`/domains/${m.value.id}/analysis`)
+    if (run === analysisRun) errors.value = issues.filter((i) => i.severity === 'error' && i.entity_ids.includes(id))
+  } finally {
+    if (run === analysisRun) analyzing.value = false
+  }
 }, { immediate: true })
 // transizioni mancanti: effetti a cascata di altre entità che qui non trovano una transizione
 const missing = computed(() => errors.value.filter((i) => i.category === 'missing_transition' && i.entity_id === e.value.id))
@@ -217,13 +225,11 @@ const otherErrors = computed(() => {
     if (i.category === 'missing_transition') continue
     // conflitto dovuto a una transizione mancante qui: è già nella lista sopra
     if (i.conflict?.gap && missing.value.some((x) => sameGap(x.gap, i.conflict.gap))) continue
-    const text = i.category === 'deadlock' ? '' : plain(i.conflict ? `${i.conflict.what}: ${i.conflict.reason}` : i.detail)
+    const text = i.category === 'deadlock' ? '' : plain(i.conflict ? `${i.conflict.what}, ${i.conflict.reason}` : i.detail)
     const key = `${i.category}|${plain(i.title)}|${text}`
     const row = rows.get(key)
-    // la figlia è già in uno stato finale: si sistema sull'effetto del padre, con "ignora se già finale"
-    const skipFinal = !!i.conflict?.gap && !!stateById(i.conflict.gap.from)?.is_final
     if (row) row.count++
-    else rows.set(key, { key, category: i.category, title: plain(i.title), text, count: 1, fixAt: skipFinal ? i.entity_id : null })
+    else rows.set(key, { key, category: i.category, title: plain(i.title), text, count: 1, fix: i.conflict?.fix && { ...i.conflict.fix, text: plain(i.conflict.fix.text) } })
   }
   return [...rows.values()]
 })
@@ -325,11 +331,15 @@ const guardText = (g) =>
     <div v-else class="p-8 grid gap-6 xl:grid-cols-5">
       <div class="xl:col-span-3 space-y-6">
         <!-- ERRORI DELL'ANALISI SU QUESTA ENTITÀ -->
+        <div v-if="analyzing && !errorCount" class="card px-6 py-3.5 flex items-center gap-3 text-sm text-zinc-500">
+          <i class="fa-solid fa-circle-notch fa-spin fa-fw text-[14px] text-indigo-500" />{{ $t('entity.errors.loading') }}
+        </div>
         <section v-if="errorCount" class="card overflow-hidden ring-1 ring-rose-200">
           <div class="flex items-center gap-4 px-6 py-4 border-b border-rose-100 bg-rose-50/60">
             <div class="flex-1">
               <h2 class="font-semibold tracking-tight flex items-center gap-2 text-rose-900">
                 <i class="fa-solid fa-circle-exclamation fa-fw text-[13px] text-rose-500" />{{ $t('entity.errors.title', errorCount) }}
+                <i v-if="analyzing" class="fa-solid fa-circle-notch fa-spin fa-fw text-[12px] text-rose-400" :title="$t('entity.errors.loading')" />
               </h2>
               <p class="text-xs text-rose-800/80">{{ $t('entity.errors.hint') }}</p>
             </div>
@@ -371,13 +381,14 @@ const guardText = (g) =>
                 <span v-if="x.count > 1" class="text-xs text-zinc-400 tabular-nums">×{{ x.count }}</span>
               </div>
               <p v-if="x.text" class="text-xs text-zinc-500 mt-1">{{ x.text }}</p>
-              <p v-if="x.fixAt" class="text-xs text-indigo-700 mt-1 flex items-center gap-1.5 flex-wrap">
-                <i class="fa-solid fa-wrench fa-fw text-[10px]" />
-                <template v-if="x.fixAt === e.id">{{ $t('entity.errors.fixHere', { flag: $t('entity.effect.skipFinal') }) }}</template>
-                <i18n-t v-else scope="global" keypath="entity.errors.fixAt" tag="span">
-                  <template #entity><RouterLink :to="`/d/${m.id}/entity/${x.fixAt}`" class="font-medium underline">{{ ename(x.fixAt) }}</RouterLink></template>
-                  <template #flag>{{ $t('entity.effect.skipFinal') }}</template>
-                </i18n-t>
+              <p v-if="x.fix" class="text-xs text-indigo-700 mt-1 flex items-start gap-1.5">
+                <i class="fa-solid fa-wrench fa-fw text-[10px] mt-[3px] shrink-0" />
+                <span>
+                  {{ x.fix.text }}
+                  <RouterLink v-if="x.fix.entity_id !== e.id" :to="`/d/${m.id}/entity/${x.fix.entity_id}`" class="font-medium underline whitespace-nowrap">
+                    {{ $t('analysis.openEntity') }}
+                  </RouterLink>
+                </span>
               </p>
             </div>
           </div>
