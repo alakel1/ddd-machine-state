@@ -86,14 +86,14 @@ def derived_invariants(model: dict, t=None) -> list[dict]:
         not_gone = [s["id"] for s in child["states"] if s["id"] not in gone_states(child)]
         if not_gone:
             out.append({
-                "id": f"rel{r['id']}", "derived": True, "severity": "error",
+                "id": f"rel{r['id']}", "derived": True, "relation_id": r["id"], "kind": "gone", "severity": "error",
                 "name": t("r.derived.name", **names), "description": t("r.derived.desc", **names),
                 "rules": [{"entity_id": parent["id"], "state_ids": gone_states(parent), "negate": 0},
                           {"entity_id": child["id"], "state_ids": not_gone, "negate": 0}],
             })
         if off_states(parent) and active_states(child):
             out.append({
-                "id": f"rel{r['id']}off", "derived": True, "severity": "error",
+                "id": f"rel{r['id']}off", "derived": True, "relation_id": r["id"], "kind": "off", "severity": "error",
                 "name": t("r.derived_off.name", **names), "description": t("r.derived_off.desc", **names),
                 "rules": [{"entity_id": parent["id"], "state_ids": off_states(parent), "negate": 0},
                           {"entity_id": child["id"], "state_ids": active_states(child), "negate": 0}],
@@ -245,7 +245,8 @@ def relation_issues(model: dict, sname, t=None) -> list[dict]:
         creations = [t for t in child["transitions"] if is_create(t)]
         if not creations:
             add("warning", "composition", t("r.always_exists.title", child=C, parent=P),
-                t("r.always_exists.detail", child=C, parent=P), entity_id=child["id"], relation_id=r["id"])
+                t("r.always_exists.detail", child=C, parent=P), entity_id=child["id"], relation_id=r["id"],
+                code="r.always_exists")
         for c in creations:
             ok = any(requires_parent(g, parent["id"]) for g in c["guards"])
             if not ok and c.get("cascade_only"):
@@ -256,7 +257,7 @@ def relation_issues(model: dict, sname, t=None) -> list[dict]:
             if not ok:
                 add("warning", "composition", t("r.create_without_parent.title", action=c["action"], child=C, parent=P),
                     t("r.create_without_parent.detail", child=C, parent=P),
-                    entity_id=child["id"], transition_id=c["id"], relation_id=r["id"])
+                    entity_id=child["id"], transition_id=c["id"], relation_id=r["id"], code="r.create_without_parent")
         # le azioni che eliminano o spengono il padre devono occuparsi dei figli
         gone, off = set(gone_states(parent)) - {NONE}, set(off_states(parent))
         for x in parent["transitions"]:
@@ -266,7 +267,7 @@ def relation_issues(model: dict, sname, t=None) -> list[dict]:
             st = sname(x["to_state_id"])
             add("warning", "composition", t(f"{key}.title", action=x["action"], parent=P, state=st, child=C),
                 t(f"{key}.detail", state=st, child=C, parent=P),
-                entity_id=parent["id"], transition_id=x["id"], relation_id=r["id"])
+                entity_id=parent["id"], transition_id=x["id"], relation_id=r["id"], code=key)
 
     # --- coerenza tra relazioni e regole ---
     linked = {}  # coppia non ordinata -> tipo di regola che lega le due entità

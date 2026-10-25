@@ -128,3 +128,51 @@ def save_transition(conn, data: dict, transition_id: int | None = None) -> int:
         f = {k: v for k, v in _clean_effect(f).items() if k != "id"}
         db.insert(conn, "effects", {**f, "transition_id": transition_id})
     return transition_id
+
+
+# ---------------------------------------------------------------- soluzioni ("Risolvi")
+_DOMAIN_OF = {
+    "entities": "SELECT domain_id FROM entities WHERE id=?",
+    "relations": "SELECT domain_id FROM relations WHERE id=?",
+    "states": "SELECT e.domain_id FROM states s JOIN entities e ON e.id=s.entity_id WHERE s.id=?",
+    "transitions": "SELECT e.domain_id FROM transitions t JOIN entities e ON e.id=t.entity_id WHERE t.id=?",
+    "effects": "SELECT e.domain_id FROM effects f JOIN transitions t ON t.id=f.transition_id "
+               "JOIN entities e ON e.id=t.entity_id WHERE f.id=?",
+    "guards": "SELECT e.domain_id FROM guards g JOIN transitions t ON t.id=g.transition_id "
+              "JOIN entities e ON e.id=t.entity_id WHERE g.id=?",
+}
+_UPDATABLE = {"effects", "guards", "states", "transitions", "relations"}
+_DELETABLE = {"effects", "guards"}
+
+
+def _check(conn, domain_id: int, table: str, id_) -> None:
+    r = conn.execute(_DOMAIN_OF[table], (id_,)).fetchone()
+    if not r or r["domain_id"] != domain_id:
+        raise ValueError(f"{table} {id_}")
+
+
+def apply_ops(conn, domain_id: int, ops: list[dict]) -> None:
+    """Applica le operazioni di una soluzione proposta dall'analisi (vedi fixes.py), tutte o nessuna."""
+    for op in ops:
+        kind = op.get("op")
+        if kind == "add_transition":
+            _check(conn, domain_id, "entities", op["entity_id"])
+            save_transition(conn, {"entity_id": op["entity_id"], "kind": "normal", "from_state_id": op["from_state_id"],
+                                   "to_state_id": op["to_state_id"], "action": op["action"],
+                                   "cascade_only": op.get("cascade_only", 1), "guards": [], "effects": []})
+        elif kind == "add_effect":
+            _check(conn, domain_id, "transitions", op["transition_id"])
+            _check(conn, domain_id, "entities", op["entity_id"])
+            db.insert(conn, "effects", _clean_effect({k: v for k, v in op.items() if k != "op"}))
+        elif kind == "add_guard":
+            _check(conn, domain_id, "transitions", op["transition_id"])
+            _check(conn, domain_id, "entities", op["entity_id"])
+            db.insert(conn, "guards", {**{k: v for k, v in op.items() if k != "op"}, "kind": "state"})
+        elif kind == "update" and op.get("table") in _UPDATABLE:
+            _check(conn, domain_id, op["table"], op["id"])
+            db.update(conn, op["table"], op["id"], op.get("data") or {})
+        elif kind == "delete" and op.get("table") in _DELETABLE:
+            _check(conn, domain_id, op["table"], op["id"])
+            conn.execute(f"DELETE FROM {op['table']} WHERE id=?", (op["id"],))
+        else:
+            raise ValueError(str(kind))

@@ -7,6 +7,7 @@ import { locale } from '../i18n'
 import PageHeader from '../components/PageHeader.vue'
 import StateChip from '../components/StateChip.vue'
 import Trace from '../components/Trace.vue'
+import FixModal from '../components/FixModal.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -19,6 +20,7 @@ const sev = ref(route.query.sev || 'all')
 const cat = ref(route.query.cat || 'all')
 const focus = computed(() => Number(route.query.entity) || null)
 const clearFocus = () => router.replace({ query: { ...route.query, entity: undefined } })
+const fixing = ref(null) // segnalazione aperta in "Risolvi"
 
 async function run() {
   loading.value = true
@@ -159,6 +161,9 @@ watch(locale, () => { run(); loadMatrix() })
               <p v-if="i.detail && !i.conflict" class="text-sm text-zinc-600 mt-0.5">{{ i.detail }}</p>
             </div>
             <RouterLink v-if="i.entity_id" :to="`/d/${m.id}/entity/${i.entity_id}`" class="btn-ghost !text-xs shrink-0">{{ $t('analysis.openEntity') }}</RouterLink>
+            <button class="shrink-0 !text-xs" :class="i.fixes?.length ? 'btn-accent' : 'btn-outline'" @click="fixing = i">
+              <i class="fa-solid fa-wand-magic-sparkles fa-fw text-[12px]" /> {{ $t('fix.button') }}
+            </button>
           </div>
           <!-- conflitto: azione → effetti a cascata → dove si blocca e perché -->
           <div v-if="i.conflict" class="mt-3 rounded-xl bg-zinc-50/80 ring-1 ring-zinc-200 px-4 py-3">
@@ -271,4 +276,5 @@ watch(locale, () => { run(); loadMatrix() })
       </section>
     </div>
   </div>
+  <FixModal v-if="fixing" :issue="fixing" @close="fixing = null" @applied="run(); loadMatrix()" />
 </template>

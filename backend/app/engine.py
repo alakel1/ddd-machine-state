@@ -15,6 +15,7 @@ import threading
 from collections import OrderedDict, deque
 from operator import itemgetter
 
+from .fixes import fixes_for
 from .i18n import translator
 from .relations import derived_invariants, expand, gone_states, relation_issues
 
@@ -41,6 +42,7 @@ class Engine:
         self.transition = {t["id"]: t for t in self.transitions}
         # le composizioni aggiungono le loro invarianti (già incluse se il modello è stato espanso)
         self.invariants = model["invariants"] + ([] if model.get("_derived_done") else derived_invariants(model, self.t))
+        self._invariant_by_id = {str(inv["id"]): inv for inv in self.invariants}
         self.order = [e["id"] for e in self.entities]
         self._outgoing = {}
         # forme precompilate per i percorsi caldi dell'esplorazione
@@ -205,10 +207,34 @@ class Engine:
     def rule_notes(self, t: dict) -> list[str]:
         return [g["description"] for g in t["guards"] if g["kind"] == "rule" and g["description"]]
 
-    def _conflict(self, t: dict, what: str, eid, depth: int, reason: str, details=(), gap=None, fix=None) -> dict:
+    def guard_misses(self, t: dict, state: dict) -> list[dict]:
+        """Guardie di stato di t che non passano, con gli stati che hanno trovato (per proporre come allargarle)."""
+        out = []
+        for g in t["guards"]:
+            if g["kind"] != "state" or g.get("entity_id") is None:
+                continue
+            if g.get("each"):
+                cur = []
+                for pid, gone, kids in g["each"]:
+                    found = [state.get(x, NONE) for x in kids]
+                    if state.get(pid, NONE) not in gone and any(s in g["state_ids"] for s in found) == bool(g["negate"]):
+                        cur += found
+            else:
+                ids = g.get("entity_ids") or [g["entity_id"]]
+                if g["entity_id"] not in state:
+                    continue
+                existing = [x for x in ids if state.get(x, NONE) != NONE] or ids[:1]
+                cur = [state[x] for x in existing if (state[x] in g["state_ids"]) == bool(g["negate"])]
+            if cur:
+                out.append({"guard_id": g["id"], "transition_id": t.get("base_id", t["id"]), "current": sorted(set(cur))})
+        return out
+
+    def _conflict(self, t: dict, what: str, eid, depth: int, reason: str, details=(), gap=None, fix=None,
+                  effect=None, misses=()) -> dict:
         """Conflitto strutturato: quale effetto di t (what) non riesce e perché (reason, details = guardie che bloccano).
         gap: la transizione che manca all'entità coinvolta ({"from", "to"} oppure {"from", "action"}).
         fix: (chiave, entità su cui intervenire, parametri) del suggerimento; con un gap si ricava da solo.
+        effect: l'effetto che non riesce; misses: le guardie che lo bloccano (vedi guard_misses).
         what può essere una funzione: il testo si costruisce solo quando il conflitto c'è davvero."""
         what = what() if callable(what) else what
         if gap and fix is None:
@@ -224,6 +250,7 @@ class Engine:
         message = self.t("effect.conflict", action=t["action"], what=what, reason=reason) + (f" — {'; '.join(details)}" if details else "")
         return {"message": message, "trigger_id": t["id"], "entity_id": eid, "depth": depth + 1,
                 "what": what, "reason": reason, "details": details, "gap": gap,
+                "effect_id": effect and effect.get("id"), "misses": list(misses),
                 "fix": fix and {"text": self.t(fix[0], entity=self.ename(fix[1]), **fix[2]), "entity_id": fix[1]}}
 
     def fire(self, t: dict, state: dict, depth: int = 0, chain: frozenset = frozenset()):
@@ -267,7 +294,8 @@ class Engine:
             forced = {"transition_id": None, "entity_id": eid, "action": self.t("step.forced"),
                       "from": cur, "to": target, "depth": depth + 1, "forced": True}
             if not cands:
-                conflicts.append(self._conflict(t, what, eid, depth, self.t("effect.no_transition"), gap={"from": cur, "to": target}))
+                conflicts.append(self._conflict(t, what, eid, depth, self.t("effect.no_transition"), gap={"from": cur, "to": target},
+                                                effect=eff))
                 new[eid] = target
                 steps.append(forced)
                 continue
@@ -280,13 +308,14 @@ class Engine:
                 why += f
             if chosen is None:
                 conflicts.append(self._conflict(t, what, eid, depth, self.t("effect.blocked", action=cands[0]["action"]), why,
-                                                fix=("fix.guard", eid, {"name": cands[0]["action"]})))
+                                                fix=("fix.guard", eid, {"name": cands[0]["action"]}), effect=eff,
+                                                misses=[m for c in cands for m in self.guard_misses(c, new)]))
                 new[eid] = target
                 steps.append(forced)
                 continue
             if chosen["id"] in chain or depth >= MAX_CASCADE_DEPTH:
                 conflicts.append(self._conflict(t, what, eid, depth, self.t("effect.cycle_on", action=chosen["action"]),
-                                                fix=("fix.cycle", eid, {"action": chosen["action"]})))
+                                                fix=("fix.cycle", eid, {"action": chosen["action"]}), effect=eff))
                 continue
             new, sub_steps, sub_conf = self.fire(chosen, new, depth + 1, chain)
             steps += sub_steps
@@ -309,7 +338,7 @@ class Engine:
             return state, [], []
         if not cands:
             return state, [], [self._conflict(t, what, eid, depth, self.t("effect.action_unavailable", state=self.sname(cur)),
-                                              gap={"from": cur, "action": name})]
+                                              gap={"from": cur, "action": name}, effect=eff)]
         ok, why = [], []
         for c in cands:
             f = self.guard_failures(c, state)
@@ -319,13 +348,15 @@ class Engine:
                 ok.append(c)
         if not ok:
             return state, [], [self._conflict(t, what, eid, depth, self.t("effect.blocked", action=name), why,
-                                              fix=("fix.guard", eid, {"name": name}))]
+                                              fix=("fix.guard", eid, {"name": name}), effect=eff,
+                                              misses=[m for c in cands for m in self.guard_misses(c, state)])]
         if len(ok) > 1:
             names = ", ".join(self.sname(c["to_state_id"]) for c in ok)
             return state, [], [self._conflict(t, what, eid, depth, self.t("effect.action_ambiguous", state=self.sname(cur), targets=names),
-                                              fix=("fix.ambiguous", eid, {}))]
+                                              fix=("fix.ambiguous", eid, {}), effect=eff)]
         if ok[0]["id"] in chain or depth >= MAX_CASCADE_DEPTH:
-            return state, [], [self._conflict(t, what, eid, depth, self.t("effect.cycle"), fix=("fix.cycle", eid, {"action": name}))]
+            return state, [], [self._conflict(t, what, eid, depth, self.t("effect.cycle"), fix=("fix.cycle", eid, {"action": name}),
+                                              effect=eff)]
         return self.fire(ok[0], state, depth + 1, chain)
 
     def _fire_creation(self, t: dict, eff: dict, state: dict, depth: int, chain: frozenset):
@@ -338,7 +369,8 @@ class Engine:
                              "from": state[eid], "to": state[eid], "depth": depth + 1, "skipped": True}], []
         creations = [c for c in self.entity[eid]["transitions"] if is_create(c)]
         if not creations:
-            return state, [], [self._conflict(t, what, eid, depth, self.t("effect.no_creations"), fix=("fix.add_creation", eid, {}))]
+            return state, [], [self._conflict(t, what, eid, depth, self.t("effect.no_creations"), fix=("fix.add_creation", eid, {}),
+                                              effect=eff)]
         ok, why = [], []
         for c in creations:
             f = self.guard_failures(c, state)
@@ -348,14 +380,15 @@ class Engine:
                 ok.append(c)
         if not ok:
             return state, [], [self._conflict(t, what, eid, depth, self.t("effect.no_creation_possible"), why,
-                                              fix=("fix.guard", eid, {"name": creations[0]["action"]}))]
+                                              fix=("fix.guard", eid, {"name": creations[0]["action"]}), effect=eff,
+                                              misses=[m for c in creations for m in self.guard_misses(c, state)])]
         if len(ok) > 1:
             names = ", ".join(f"{self.t('q', x=c['action'])} → {self.sname(c['to_state_id'])}" for c in ok)
             return state, [], [self._conflict(t, what, eid, depth, self.t("effect.creations_ambiguous", options=names),
-                                              fix=("fix.ambiguous", eid, {}))]
+                                              fix=("fix.ambiguous", eid, {}), effect=eff)]
         if ok[0]["id"] in chain or depth >= MAX_CASCADE_DEPTH:
             return state, [], [self._conflict(t, what, eid, depth, self.t("effect.cycle_on", action=ok[0]["action"]),
-                                              fix=("fix.cycle", eid, {"action": ok[0]["action"]}))]
+                                              fix=("fix.cycle", eid, {"action": ok[0]["action"]}), effect=eff)]
         return self.fire(ok[0], state, depth + 1, chain)
 
     def triggers(self, t: dict) -> list[dict]:
@@ -650,7 +683,7 @@ class Engine:
         # category è un codice stabile: il frontend lo traduce e ci filtra sopra
         def add(sev, cat, key, detail=None, params=None, **extra):
             params = params or {}
-            issues.append({"severity": sev, "category": cat, "title": T(f"{key}.title", **params),
+            issues.append({"severity": sev, "category": cat, "code": key, "title": T(f"{key}.title", **params),
                            "detail": T(f"{key}.detail", **params) if detail is None else detail, **extra})
 
         # --- analisi statica per entità ---
@@ -787,15 +820,20 @@ class Engine:
                     entity_id=t["entity_id"], transition_id=t["id"])
 
         # il simulatore ha un'istanza per entità: i percorsi che passano dalle copie #2, #3 (id negativi) non si riproducono
-        invariant_entities = {inv["id"]: [r["entity_id"] for r in inv["rules"]] for inv in self.invariants}
+        # invarianti per id del modello (le copie per istanza hanno id "5#2")
+        inv_of = lambda i: self._invariant_by_id.get(str(i.get("invariant_id")).split("#")[0])
         relation_ends = {r["id"]: [r["source_id"], r["target_id"]] for r in self.model.get("relations", [])}
+        tbase = lambda tid: dyn.transition[tid].get("base_id", tid) if tid in dyn.transition else tid
         for i in issues:
             if i.get("trace") is not None:
                 i["replayable"] = all(s["transition_id"] > 0 for s in i["trace"])
             # entità a cui la segnalazione si riferisce: la scheda di ciascuna la mostra
+            inv = inv_of(i) if i.get("invariant_id") is not None else None
             ids = list(i.get("entity_ids", [])) + ([i["entity_id"]] if i.get("entity_id") is not None else [])
-            ids += invariant_entities.get(i.get("invariant_id"), []) + relation_ends.get(i.get("relation_id"), [])
+            ids += [r["entity_id"] for r in inv["rules"]] if inv else []
+            ids += relation_ends.get(i.get("relation_id"), [])
             i["entity_ids"] = sorted({base(x) for x in ids if x is not None})
+            i["fixes"] = fixes_for(self, i, inv=inv, base=base, tbase=tbase)
         order = {"error": 0, "warning": 1, "info": 2}
         issues.sort(key=lambda i: order.get(i["severity"], 3))
         return {
@@ -842,7 +880,7 @@ class Engine:
             requested = list(g.pop("requested_by").values())
             params.update(entity=self.ename(eid), src=self.sname(src),
                           by=", ".join(f"{self.ename(r['entity_id'])} {self.t('q', x=r['action'])}" for r in requested))
-            out.append({"severity": "error", "category": "missing_transition",
+            out.append({"severity": "error", "category": "missing_transition", "code": key,
                         "title": self.t(f"{key}.title", **params), "detail": self.t(f"{key}.detail", **params),
                         "entity_id": eid, "state_id": src, "gap": g, "requested_by": requested})
         return out

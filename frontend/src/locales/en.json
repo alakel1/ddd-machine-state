@@ -10,7 +10,24 @@
     "swap": "Swap",
     "confirmDelete": "Delete “{name}”?",
     "quoted": "“{x}”",
-    "or": "or"
+    "or": "or",
+    "close": "Close"
+  },
+  "fix": {
+    "button": "Fix",
+    "title": "Fix",
+    "options": "One possible fix | {n} possible fixes",
+    "suggested": "suggested",
+    "apply": "Apply",
+    "applied": "Fix applied: analysis updated",
+    "undoHint": "The change is applied to the model right away; you can always review it in the entity page.",
+    "manual": {
+      "default": "There is no safe automatic fix for this case: open the entity and review the actions involved.",
+      "deadlock": "No action can run in this combination of states. Replay the path in the simulator: blocked actions show which guard stops them.",
+      "dead_actions": "The action can never run without conflicts: check its guards and, if it is cascade-only, that something triggers it.",
+      "reachability": "The state is never reached: no action leads to it, or the guards of those that do are never satisfied.",
+      "relations": "This is a hint about how relations are drawn: declare (or remove) them from the entity page."
+    }
   },
   "nav": {
     "domain": "Domain",

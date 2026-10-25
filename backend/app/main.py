@@ -121,6 +121,19 @@ def apply(domain_id: int, request: Request, payload: dict = Body(...)):
     return {**r, "evaluation": eng.evaluate(r["state"])} if r["ok"] else r
 
 
+@app.post("/api/domains/{domain_id}/fix")
+def apply_fix(domain_id: int, request: Request, payload: dict = Body(...)):
+    """Applica una soluzione proposta dall'analisi ("Risolvi"): operazioni in una sola transazione."""
+    lang = lang_of(request)
+    try:
+        with db.tx() as conn:
+            _model_or_404(conn, domain_id, lang)
+            editing.apply_ops(conn, domain_id, payload.get("ops") or [])
+            return {"model": model_payload(conn, domain_id, lang)}
+    except (ValueError, KeyError) as exc:
+        raise HTTPException(400, translator(lang)("api.bad_fix")) from exc
+
+
 @app.post("/api/domains/{domain_id}/replay")
 def replay(domain_id: int, request: Request, payload: dict = Body(...)):
     lang = lang_of(request)

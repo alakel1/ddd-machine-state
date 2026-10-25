@@ -10,7 +10,24 @@
     "swap": "Inverti",
     "confirmDelete": "Eliminare «{name}»?",
     "quoted": "«{x}»",
-    "or": "o"
+    "or": "o",
+    "close": "Chiudi"
+  },
+  "fix": {
+    "button": "Risolvi",
+    "title": "Risolvi",
+    "options": "Una soluzione possibile | {n} soluzioni possibili",
+    "suggested": "consigliata",
+    "apply": "Applica",
+    "applied": "Soluzione applicata: analisi aggiornata",
+    "undoHint": "La modifica si applica subito al modello; puoi sempre rivederla nella scheda dell'entità.",
+    "manual": {
+      "default": "Per questo caso non c'è una correzione automatica sicura: apri l'entità e rivedi le azioni coinvolte.",
+      "deadlock": "Nessuna azione è eseguibile in questa combinazione di stati. Riproduci il percorso nel simulatore: le azioni bloccate mostrano quale guardia le ferma.",
+      "dead_actions": "L'azione non è mai eseguibile senza conflitti: controlla le sue guardie, e se è solo in cascata che qualcuno la inneschi.",
+      "reachability": "Lo stato non viene mai raggiunto: nessuna azione ci arriva, oppure le guardie di quelle che ci arrivano non sono mai soddisfatte.",
+      "relations": "È un'indicazione sul disegno delle relazioni: dichiarale (o toglile) dalla scheda dell'entità."
+    }
   },
   "nav": {
     "domain": "Dominio",

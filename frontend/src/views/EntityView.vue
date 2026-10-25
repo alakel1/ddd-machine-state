@@ -11,6 +11,7 @@ import Mermaid from '../components/Mermaid.vue'
 import StateChip from '../components/StateChip.vue'
 import StatePicker from '../components/StatePicker.vue'
 import RelationModal from '../components/RelationModal.vue'
+import FixModal from '../components/FixModal.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -36,6 +37,7 @@ const newState = ref('')
 const newAttr = ref('')
 const draft = ref(null)
 const relationDraft = ref(null) // { relation } da modificare, { relation: null } per una nuova
+const fixing = ref(null) // errore aperto in "Risolvi"
 
 // ---------- entità ----------
 async function saveMeta() {
@@ -228,8 +230,11 @@ const otherErrors = computed(() => {
     const text = i.category === 'deadlock' ? '' : plain(i.conflict ? `${i.conflict.what}, ${i.conflict.reason}` : i.detail)
     const key = `${i.category}|${plain(i.title)}|${text}`
     const row = rows.get(key)
-    if (row) row.count++
-    else rows.set(key, { key, category: i.category, title: plain(i.title), text, count: 1, fix: i.conflict?.fix && { ...i.conflict.fix, text: plain(i.conflict.fix.text) } })
+    if (row) {
+      row.count++
+      if (!row.issue.fixes?.length && i.fixes?.length) row.issue = i // per "Risolvi": il caso con soluzioni pronte
+    } else rows.set(key, { key, category: i.category, title: plain(i.title), text, count: 1, issue: i,
+      fix: i.conflict?.fix && { ...i.conflict.fix, text: plain(i.conflict.fix.text) } })
   }
   return [...rows.values()]
 })
@@ -384,22 +389,27 @@ function changeGuardEntity(g) {
             </div>
           </div>
           <div v-if="otherErrors.length" class="divide-y divide-zinc-100" :class="missing.length && 'border-t border-zinc-100'">
-            <div v-for="x in otherErrors" :key="x.key" class="px-6 py-3">
-              <div class="flex items-center gap-2 flex-wrap">
-                <span class="tag bg-zinc-50 text-zinc-500 ring-zinc-200">{{ $t(`analysis.category.${x.category}`) }}</span>
-                <span class="text-sm font-medium text-zinc-900">{{ x.title }}</span>
-                <span v-if="x.count > 1" class="text-xs text-zinc-400 tabular-nums">×{{ x.count }}</span>
+            <div v-for="x in otherErrors" :key="x.key" class="flex items-start gap-3 px-6 py-3">
+              <div class="flex-1 min-w-0">
+                <div class="flex items-center gap-2 flex-wrap">
+                  <span class="tag bg-zinc-50 text-zinc-500 ring-zinc-200">{{ $t(`analysis.category.${x.category}`) }}</span>
+                  <span class="text-sm font-medium text-zinc-900">{{ x.title }}</span>
+                  <span v-if="x.count > 1" class="text-xs text-zinc-400 tabular-nums">×{{ x.count }}</span>
+                </div>
+                <p v-if="x.text" class="text-xs text-zinc-500 mt-1">{{ x.text }}</p>
+                <p v-if="x.fix" class="text-xs text-indigo-700 mt-1 flex items-start gap-1.5">
+                  <i class="fa-solid fa-wrench fa-fw text-[10px] mt-[3px] shrink-0" />
+                  <span>
+                    {{ x.fix.text }}
+                    <RouterLink v-if="x.fix.entity_id !== e.id" :to="`/d/${m.id}/entity/${x.fix.entity_id}`" class="font-medium underline whitespace-nowrap">
+                      {{ $t('analysis.openEntity') }}
+                    </RouterLink>
+                  </span>
+                </p>
               </div>
-              <p v-if="x.text" class="text-xs text-zinc-500 mt-1">{{ x.text }}</p>
-              <p v-if="x.fix" class="text-xs text-indigo-700 mt-1 flex items-start gap-1.5">
-                <i class="fa-solid fa-wrench fa-fw text-[10px] mt-[3px] shrink-0" />
-                <span>
-                  {{ x.fix.text }}
-                  <RouterLink v-if="x.fix.entity_id !== e.id" :to="`/d/${m.id}/entity/${x.fix.entity_id}`" class="font-medium underline whitespace-nowrap">
-                    {{ $t('analysis.openEntity') }}
-                  </RouterLink>
-                </span>
-              </p>
+              <button class="shrink-0 !text-xs !py-1" :class="x.issue.fixes?.length ? 'btn-accent' : 'btn-outline'" @click="fixing = x.issue">
+                <i class="fa-solid fa-wand-magic-sparkles fa-fw text-[11px]" /> {{ $t('fix.button') }}
+              </button>
             </div>
           </div>
         </section>
@@ -782,6 +792,8 @@ function changeGuardEntity(g) {
     </Modal>
 
     <RelationModal v-if="relationDraft" :relation="relationDraft.relation" :source-id="e.id" @close="relationDraft = null" />
+    <!-- il modello aggiornato fa ripartire da solo il calcolo degli errori -->
+    <FixModal v-if="fixing" :issue="fixing" @close="fixing = null" />
   </div>
   <div v-else class="p-8 text-zinc-400">{{ $t('entity.notFound') }}</div>
 </template>
