@@ -277,6 +277,8 @@
       "forbidden": "vietata, mai raggiunta"
     },
     "whatHappens": "Cosa succede",
+    "whyStuck": "Perché nessuna azione parte",
+    "noExit": "nessuna azione in uscita",
     "reachedState": "Stato in cui succede",
     "showMissing": "+ {n} entità che non esiste | + {n} entità che non esistono",
     "hideMissing": "nascondi quelle che non esistono"

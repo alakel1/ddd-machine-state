@@ -200,6 +200,39 @@ watch(locale, () => { run(); loadMatrix() })
                           class="btn-ghost !text-xs !py-0.5 shrink-0">{{ $t('analysis.openEntity') }}</RouterLink>
             </div>
           </div>
+          <!-- deadlock: per ogni entità ferma, le azioni che escono dal suo stato e cosa le blocca -->
+          <div v-if="i.deadlock" class="mt-3 rounded-xl bg-zinc-50/80 ring-1 ring-zinc-200 px-4 py-3">
+            <div class="eyebrow mb-2">{{ $t('analysis.whyStuck') }}</div>
+            <div class="space-y-2 text-sm">
+              <div v-for="s in i.deadlock.stuck" :key="s.entity_id">
+                <div class="flex items-center gap-2 flex-wrap">
+                  <span class="size-1.5 rounded-full" :class="pal(entity(s.entity_id)?.color).dot" />
+                  <span class="text-zinc-500">{{ ename(s.entity_id) }}</span>
+                  <StateChip :id="s.state" :entity-id="s.entity_id" size="xs" />
+                  <span v-if="!s.exits.length" class="text-xs text-zinc-500">{{ $t('analysis.noExit') }}</span>
+                </div>
+                <div v-for="x in s.exits" :key="x.transition_id" class="pl-5 mt-1">
+                  <div class="flex items-center gap-2 text-rose-700">
+                    <span class="font-mono text-zinc-300">└</span>
+                    <i class="fa-solid fa-circle-xmark fa-fw text-[13px]" />
+                    <span class="font-medium">{{ x.action }}</span>
+                    <i class="fa-solid fa-arrow-right fa-fw text-[10px] text-zinc-300" />
+                    <StateChip :id="x.to" :entity-id="s.entity_id" size="xs" />
+                  </div>
+                  <ul class="pl-[42px] mt-0.5 space-y-0.5">
+                    <li v-for="r in x.reasons" :key="r" class="flex gap-1.5 text-xs text-zinc-600">
+                      <i class="fa-solid fa-lock fa-fw text-[10px] text-zinc-400 mt-[3px] shrink-0" />{{ r }}
+                    </li>
+                  </ul>
+                </div>
+              </div>
+            </div>
+            <div v-if="i.deadlock.fix" class="mt-3 pt-2.5 border-t border-zinc-200/70 flex items-start gap-2 text-sm text-indigo-800">
+              <i class="fa-solid fa-wrench fa-fw text-[11px] mt-[5px] shrink-0" />
+              <span class="flex-1">{{ i.deadlock.fix.text }}</span>
+              <RouterLink :to="`/d/${m.id}/entity/${i.deadlock.fix.entity_id}`" class="btn-ghost !text-xs !py-0.5 shrink-0">{{ $t('analysis.openEntity') }}</RouterLink>
+            </div>
+          </div>
           <div v-if="i.state" class="mt-3">
             <div class="eyebrow mb-1.5">{{ $t('analysis.reachedState') }}</div>
             <div class="flex flex-wrap items-center gap-1.5">

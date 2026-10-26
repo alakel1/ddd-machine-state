@@ -653,6 +653,57 @@ class Engine:
         text = self.t("guard.text_not_in" if g["negate"] else "guard.text_in", entity=self.ename(g["entity_id"]), states=states)
         return self.t("guard.text_each", text=text, each=self.ename(g["each_entity_id"])) if g.get("each_entity_id") else text
 
+    def _explain_deadlock(self, state: dict, trace: list) -> dict:
+        """Perché uno stato globale è un deadlock: per ogni entità ferma, le azioni che escono dal suo stato e cosa le
+        blocca. La causa è la prima guardia che non passa: nel deadlock nessuna entità si muove, quindi chi la fa fallire
+        resta dov'è per sempre; l'ultima azione del percorso che l'ha portato lì è quella da correggere."""
+        T, q = self.t, lambda x: self.t("q", x=x)
+        stuck, cause = [], None
+        for eid, sid in state.items():
+            if self.is_final(sid) or sid in self.resting:
+                continue
+            exits = []
+            for t in self.outgoing(eid, sid):
+                reasons = []
+                if t.get("cascade_only"):
+                    via = ", ".join(f"{q(x['action'])} ({self.ename(x['entity_id'])})" for x in self.triggers(t)) or T("eval.no_action")
+                    reasons.append(T("eval.cascade_only", via=via))
+                else:
+                    for g in t["guards"]:
+                        f = self.guard_failures({**t, "guards": [g]}, state)
+                        reasons += f
+                        if f and cause is None:
+                            cause = (eid, sid, t, g)
+                    if not reasons:
+                        reasons = [c["message"] for c in self.fire(t, state)[2]]
+                exits.append({"transition_id": t.get("base_id", t["id"]), "action": t["action"], "to": t["to_state_id"],
+                              "reasons": reasons})
+            stuck.append({"entity_id": eid, "state": sid, "exits": exits})
+
+        first = stuck[0]
+        p = {"entity": self.ename(first["entity_id"]), "state": self.sname(first["state"])}
+        if cause:
+            eid, sid, t, g = cause
+            p = {"entity": self.ename(eid), "state": self.sname(sid), "action": t["action"]}
+            cands = [*(g.get("entity_ids") or [g["entity_id"]]), *(x for _, _, kids in g.get("each") or () for x in kids)]
+            blocker = next((x for x in cands if (state.get(x, NONE) in g["state_ids"]) == bool(g["negate"])), g["entity_id"])
+            bstate = state.get(blocker, NONE)
+            by = next((s for s in reversed(trace) if s["entity_id"] == blocker and s["to"] == bstate), None)
+            p.update(guard=self._guard_text(g), blocker=self.ename(blocker), bstate=self.sname(bstate))
+            detail = T("a.deadlock.needs", **p) + " " + T("a.deadlock.blocker_final" if self.is_final(bstate) else "a.deadlock.blocker_stuck", **p)
+            if by:
+                detail += T("a.deadlock.by", by=by["action"], **p)
+                fix = ("fix.deadlock_effect", blocker, {**p, "by": by["action"]})
+            else:
+                detail += "."
+                fix = ("fix.deadlock_guard", eid, p)
+        elif not first["exits"]:
+            detail, fix = T("a.deadlock.no_exit", **p), ("fix.deadlock_final", first["entity_id"], p)
+        else:
+            detail, fix = T("a.deadlock.generic", **p), None
+        return {"stuck": stuck, "detail": detail,
+                "fix": fix and {"text": T(fix[0], **fix[2]), "entity_id": fix[1]}}
+
     def _broken(self, ref: dict) -> bool:
         """Guardia o condizione che cita uno stato eliminato dal modello (o di un'altra entità)."""
         return any(sid != NONE and (sid not in self.state or self.state[sid]["entity_id"] != ref["entity_id"])
@@ -801,9 +852,16 @@ class Engine:
                 conflict=c["conflict"], cascade=done, entity_ids=[base(t["entity_id"]), base(c["conflict"]["entity_id"])])
         issues += self._missing_transitions(dyn, ex["conflicts"], labels)
         for d in ex["deadlocks"]:
-            stuck = [eid for eid, sid in d["state"].items() if not dyn.is_final(sid) and sid not in dyn.resting]
-            add("error", "deadlock", "a.deadlock", params={"stuck": ", ".join(f"{dyn.ename(x)}.{dyn.sname(d['state'][x])}" for x in stuck)},
-                state=d["state"], trace=d["trace"], entity_ids=[base(x) for x in stuck])
+            why = dyn._explain_deadlock(d["state"], d["trace"])
+            if why["fix"]:
+                why["fix"]["entity_id"] = base(why["fix"]["entity_id"])
+            stuck = [x["entity_id"] for x in why["stuck"]]
+            first = why["stuck"][0]
+            key = "a.deadlock" if len(stuck) == 1 else "a.deadlock_many"
+            add("error", "deadlock", key, detail=why["detail"],
+                params={"entity": dyn.ename(first["entity_id"]), "state": dyn.sname(first["state"]),
+                        "stuck": ", ".join(f"{dyn.ename(x['entity_id'])} ({dyn.sname(x['state'])})" for x in why["stuck"])},
+                state=d["state"], trace=d["trace"], entity_ids=[base(x) for x in stuck], deadlock=why)
 
         reached_states = {sid for k in ex["reachable"] for sid in k}
         for e in self.entities:
