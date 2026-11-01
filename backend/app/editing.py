@@ -118,8 +118,9 @@ def sync_generated(conn, domain_id: int | None) -> None:
     ne ha già una scritta a mano. Idempotente: si chiama dopo ogni modifica al modello.
 
     Una transizione generata si riconosce dalla tripla (entità, da, a): se l'effetto viene risalvato (e cambia id)
-    resta la stessa riga, con gli eventuali effetti che le sono stati aggiunti; sparisce quando nessun effetto la
-    chiede più o quando una transizione scritta a mano la rende inutile."""
+    resta la stessa riga, con il suo nome e gli eventuali effetti che le sono stati aggiunti; sparisce quando nessun
+    effetto la chiede più o quando una transizione scritta a mano la rende inutile. Il nome dell'azione che la
+    richiede si usa solo quando nasce; se più azioni la chiedono, ne è proprietaria la prima che non è una creazione."""
     if domain_id is None:
         return
     states = {r["id"]: dict(r) for r in conn.execute(
@@ -132,6 +133,7 @@ def sync_generated(conn, domain_id: int | None) -> None:
     manual = {(t["entity_id"], t["from_state_id"], t["to_state_id"]) for t in trans
               if not t["origin_effect_id"] and t["kind"] != "create"}
     want = {}  # (entità, da, a) -> (effetto, nome dell'azione che la richiede)
+    effects.sort(key=lambda f: (by_id.get(f["transition_id"], {}).get("kind") == "create", f["id"]))
     for f in effects:
         if f["kind"] != "state" or f["sources"] is None or f["to_state_id"] not in states:
             continue
@@ -150,8 +152,8 @@ def sync_generated(conn, domain_id: int | None) -> None:
         w = want.pop((t["entity_id"], t["from_state_id"], t["to_state_id"]), None)
         if w is None:
             conn.execute("DELETE FROM transitions WHERE id=?", (t["id"],))
-        elif (t["origin_effect_id"], t["action"]) != w:
-            db.update(conn, "transitions", t["id"], {"origin_effect_id": w[0], "action": w[1]})
+        elif t["origin_effect_id"] != w[0]:
+            db.update(conn, "transitions", t["id"], {"origin_effect_id": w[0]})
     for (eid, src, dst), (fid, action) in want.items():
         db.insert(conn, "transitions", {"entity_id": eid, "kind": "normal", "cascade_only": 1, "from_state_id": src,
                                         "to_state_id": dst, "action": action, "actor": "", "description": "",
