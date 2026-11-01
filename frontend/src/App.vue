@@ -20,6 +20,7 @@ watch(locale, () => store.model && loadModel(store.model.id))
 const nav = computed(() => [
   { to: 'model', label: t('nav.overview'), icon: 'table-cells-large' },
   { to: 'invariants', label: t('nav.invariants'), icon: 'shield-halved', count: store.model?.invariants.length },
+  { to: 'actions', label: t('nav.actions'), icon: 'diagram-project' },
   { to: 'simulator', label: t('nav.simulator'), icon: 'play' },
   { to: 'analysis', label: t('nav.analysis'), icon: 'magnifying-glass-chart' },
   { to: 'expectations', label: t('nav.expectations'), icon: 'bullseye' },

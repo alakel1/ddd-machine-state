@@ -91,6 +91,21 @@
       "body": "What an action does to other entities: move them to a state, make them run an action by name, or create them. Each effect must find on the child a transition that exists and whose guards pass: if it does not, the cascade is blocked.",
       "example": "Order “cancel” → Payment to CANCELLED (the Payment needs a transition to CANCELLED)."
     },
+    "effectSources": {
+      "title": "Effects that create the child's transitions",
+      "body": "On a “moves to state” effect you choose which states of the child it must work from: the tool creates the missing cascade-only transitions, named after the action that needs them, and removes them when they are no longer needed. The cascade is declared in one place. The suggested states are those the child is actually in when the action can run.",
+      "example": "Order “cancel” → Payment: CANCELLED, from AUTHORIZED and CAPTURED: the Payment gets both transitions without touching its page."
+    },
+    "actionTree": {
+      "title": "Actions page",
+      "body": "For each action it shows the tree of cascades: effects, the children's actions they set off, and so on. Effects are added or removed here, and the states an effect has no transition from are shown in red: one click and the tool creates it.",
+      "example": "Phase “Confirm” → Technical function: CONFIRMED → its expert: CONFIRMED, all in one page."
+    },
+    "join": {
+      "title": "Join entities (no N-N)",
+      "body": "A many-to-many link almost always has its own states and rules: model it as an entity, child of both through two 1-N relations. N-N relations can't be created; imported ones are flagged and “Fix” creates the join entity.",
+      "example": "Worker and Project → “Project worker”, with its ASSOCIATED state."
+    },
     "skipFinal": {
       "title": "Skip if already final",
       "body": "On an effect: if the entity involved is already in a final state it is left as is instead of reporting a conflict. Useful when the effect touches every instance and some are already concluded.",
@@ -170,6 +185,26 @@
     "open": "Open points",
     "openHint": "The causes still open found by the edge case analysis (accepted ones excluded).",
     "noOpen": "No open points."
+  },
+  "actions": {
+    "eyebrow": "Cascades",
+    "title": "Actions",
+    "subtitle": "For each action, what it sets off in cascade: effects, the children's actions, and so on. Effects are added here and the tool creates the children's transitions.",
+    "search": "Search action or entity",
+    "showCascade": "also show cascade-only ones",
+    "none": "No actions.",
+    "generated": "generated",
+    "editEffects": "effects",
+    "loop": "the cascade comes back to this action: already shown above",
+    "tooDeep": "cascade too deep: open it from the list",
+    "sources": "from {states}",
+    "sourcesHint": "The child's states the effect must work from: the tool creates the missing transitions",
+    "uncovered": "The child can also be in:",
+    "coverHint": "From {state} the effect has no transition: click to have it created",
+    "covered": "Transition added",
+    "noTarget": "No action of the child matches this effect.",
+    "noEffects": "No effects.",
+    "effectsOf": "Effects of “{action}” ({entity})"
   },
   "exp": {
     "eyebrow": "Acceptance tests",
@@ -265,6 +300,7 @@
     "overview": "Overview",
     "invariants": "Invariants",
     "simulator": "Simulator",
+    "actions": "Actions",
     "analysis": "Edge case analysis",
     "history": "History",
     "expectations": "Expectations",
@@ -389,6 +425,8 @@
       "oneToMany": "Each {a} has several {b}.",
       "manyToMany": "Several {a} are linked to several {b}."
     },
+    "joinHint": "For a many-to-many link, create a join entity, child of both.",
+    "manyToManyGone": "N-N relations are no longer allowed: pick 1-1 or 1-N, or use “Fix” in the analysis to create the join entity.",
     "livenessEdit": "add them in the entity page",
     "livenessInline": "For each state, choose whether the entity is active, off (it can be turned back on) or deleted (for good): the change is saved right away.",
     "noStates": "No states yet:",
@@ -622,8 +660,18 @@
       "activeOnly": "(skipped if already in a final state)",
       "createHint": "the state is decided by the creation guards",
       "skipFinal": "skip if already final",
-      "skipFinalHint": "If the entity is already in a final state (e.g. CONFIRMED), the effect leaves it as is instead of reporting a conflict. Useful in 1-N relations: the effect only touches the instances still active and skips those already closed."
+      "skipFinalHint": "If the entity is already in a final state (e.g. CONFIRMED), the effect leaves it as is instead of reporting a conflict. Useful in 1-N relations: the effect only touches the instances still active and skips those already closed.",
+      "generate": "create the transitions from:",
+      "suggest": "suggest again",
+      "manualHint": "you write the child's transitions yourself, in its page",
+      "covered": "A hand-written transition already exists: “{action}”",
+      "willGenerate": "From {state}: the tool creates a cascade-only transition",
+      "notFrom": "The effect must not work from {state}: click to include it",
+      "noSources": "no state to start from"
     },
+    "generatedTag": "from “{action}” of {entity}",
+    "generatedHint": "Generated by the effect of another action: the tool creates and removes it. Open the originating action in the Actions page.",
+    "generatedEdit": "Generated by the effect of “{action}” ({entity}): states and name come from that effect. Here you can add guards and effects.",
     "saveAction": "Save action",
     "actionSaved": "Action saved",
     "statesHintGone": "For each state, set whether the entity is active, off (recoverable) or deleted (final).",

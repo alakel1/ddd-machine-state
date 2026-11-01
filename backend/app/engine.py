@@ -1145,6 +1145,27 @@ class Engine:
                         "entity_id": eid, "state_id": src, "gap": g, "requested_by": requested})
         return out
 
+    def effect_sources(self, queries: list[dict]) -> list[list[int]]:
+        """Per ogni {owner_id, from, entity_id}: gli stati non finali in cui entity_id si trova nelle combinazioni
+        raggiungibili in cui owner_id è nello stato di partenza `from` (0 = sta per nascere, None = qualsiasi).
+        Sono le partenze proposte per un effetto "porta in stato": gli stati che l'effetto incontrerà davvero."""
+        dyn, labels = self.dynamic()
+        reachable = dyn.explore()["reachable"]
+        base = lambda x: labels.get(x, {}).get("base", x)
+        out = []
+        for q in queries:
+            own = [i for i, x in enumerate(dyn.order) if base(x) == q["owner_id"]]
+            kid = [i for i, x in enumerate(dyn.order) if base(x) == q["entity_id"]]
+            f = q.get("from")
+            ok = (lambda s: s == NONE) if f == 0 else (lambda s: s != NONE) if f is None else (lambda s: s == f)
+            seen = set()
+            for k in reachable:
+                if any(ok(k[i]) for i in own):
+                    seen.update(k[j] for j in kid)
+            out.append([s["id"] for s in self.states_of(q["entity_id"])
+                        if s["id"] in seen and s["id"] != NONE and not self.is_final(s["id"])])
+        return out
+
     def matrix(self, a: int, b: int, limit: int = DEFAULT_EXPLORE_LIMIT) -> dict:
         """Matrice stati(A) x stati(B): raggiungibilità e violazioni."""
         ex = self.explore(limit=limit)

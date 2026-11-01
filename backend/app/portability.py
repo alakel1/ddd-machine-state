@@ -1,5 +1,5 @@
 """Import/export del dominio: JSON (round-trip) e Markdown (specifica funzionale)."""
-from . import db
+from . import db, editing
 from .engine import Engine
 from .relations import legacy_gone_states
 
@@ -8,7 +8,7 @@ def import_model(conn, m: dict, default_name: str = "") -> int:
     """Inserisce un modello (formato di load_model) rimappando tutti gli id."""
     did = db.insert(conn, "domains", {"name": m.get("name") or default_name,
                                       "description": m.get("description", "")})
-    E, S, T = {}, {}, {}
+    E, S, T, F = {}, {}, {}, {}
     # vita degli stati: formato 3 "liveness"; formato 2 "is_gone" (1 = eliminato);
     # formato 1: gli stati "assente" erano sulle relazioni e si ricavano da lì
     states = [s for e in m["entities"] for s in e.get("states", [])]
@@ -46,9 +46,17 @@ def import_model(conn, m: dict, default_name: str = "") -> int:
                     "negate": g.get("negate", 0), "description": g.get("description", ""),
                     "each_entity_id": E.get(g.get("each_entity_id")), "alt_group": g.get("alt_group", 0)})
             for f in t.get("effects", []):
-                db.insert(conn, "effects", {
+                sources = f.get("sources")
+                F[f["id"]] = db.insert(conn, "effects", {
                     "transition_id": T[t["id"]], "entity_id": E[f["entity_id"]], "kind": f.get("kind", "state"), "action": f.get("action", ""), "skip_final": f.get("skip_final", 0),
-                    "to_state_id": S.get(f["to_state_id"]) or None, "description": f.get("description", "")})
+                    "to_state_id": S.get(f["to_state_id"]) or None, "description": f.get("description", ""),
+                    "sources": None if sources is None else [S[x] for x in sources if x in S]})
+    # transizioni generate dagli effetti: si ricollegano al nuovo id dell'effetto, poi si riallineano
+    for e in m["entities"]:
+        for t in e.get("transitions", []):
+            if t.get("origin_effect_id") is not None:
+                db.update(conn, "transitions", T[t["id"]], {"origin_effect_id": F.get(t["origin_effect_id"], -1)})
+    editing.sync_generated(conn, did)
     for r in m.get("relations", []):
         src, dst, card = E[r["source_id"]], E[r["target_id"]], r.get("cardinality", "1-1")
         if card == "N-1":  # solo 1-1, 1-N, N-N: si legge dal lato "1"

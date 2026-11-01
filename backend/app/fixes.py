@@ -214,6 +214,11 @@ def _local_fixes(x: _Ctx, issue):
     if code == "a.cascade_never" and t:
         return [x.fix("cascade_direct", [op_update("transitions", t["id"], cascade_only=0)], action=t["action"])]
     rel = next((r for r in e.model.get("relations", []) if r["id"] == issue.get("relation_id")), None)
+    if code == "r.many_to_many" and rel:
+        a, b = e.ename(rel["source_id"]), e.ename(rel["target_id"])
+        name, state = f"{a} · {b}", e.t("fx.join_state")
+        return [x.fix("join", [{"op": "add_join", "relation_id": rel["id"], "name": name, "state": state,
+                                "create_action": e.t("fx.create_name")}], name=name, state=state, a=a, b=b)]
     if code in ("r.parent_leaves", "r.parent_off") and rel and t:
         return _composition_effect(x, rel, "gone" if code == "r.parent_leaves" else "off", t) + [_uncompose(x, rel)]
     if code == "r.create_without_parent" and rel and t:

@@ -91,6 +91,21 @@
       "body": "Cosa fa un'azione alle altre entità: le porta in uno stato, fa eseguire loro un'azione per nome, oppure le fa nascere. Ogni effetto deve trovare sull'entità figlia una transizione che esista e le cui guardie passino: se non la trova, è una cascata bloccata.",
       "example": "Ordine «annulla» → Pagamento in ANNULLATO (serve una transizione del Pagamento verso ANNULLATO)."
     },
+    "effectSources": {
+      "title": "Effetti che creano le transizioni del figlio",
+      "body": "Su un effetto «passa allo stato» scegli da quali stati del figlio deve funzionare: le transizioni «solo in cascata» che mancano le crea il tool, con il nome dell'azione che le richiede, e le toglie quando non servono più. La cascata si dichiara così in un punto solo. Gli stati proposti sono quelli in cui il figlio si trova davvero quando l'azione può partire.",
+      "example": "Ordine «annulla» → Pagamento: ANNULLATO, da AUTORIZZATO e CATTURATO: il Pagamento riceve le due transizioni senza toccare la sua scheda."
+    },
+    "actionTree": {
+      "title": "Pagina Azioni",
+      "body": "Per ogni azione mostra l'albero delle cascate: effetti, azioni dei figli che fanno scattare, e così via. Qui si aggiungono o tolgono effetti, e gli stati da cui un effetto non ha una transizione compaiono in rosso: un clic e il tool la crea.",
+      "example": "Fase «Conferma» → Funzione tecnica: CONFERMATA → Prof. tecnico di funzione tecnica: CONFERMATO, tutto in una pagina."
+    },
+    "join": {
+      "title": "Entità di join (niente N-N)",
+      "body": "Un legame molti-a-molti ha quasi sempre stati e regole suoi: si modella come entità, figlia delle due con due relazioni 1-N. Le relazioni N-N non si possono creare; quelle importate sono segnalate e «Risolvi» crea l'entità di join.",
+      "example": "Lavoratore e Progetto → «Lavoratore di progetto», con il suo stato ASSOCIATO."
+    },
     "skipFinal": {
       "title": "Ignora se già finale",
       "body": "Su un effetto: se l'entità coinvolta è già in uno stato finale, la si lascia com'è invece di segnalare un conflitto. Utile quando l'effetto tocca tutte le istanze e alcune sono già concluse.",
@@ -170,6 +185,26 @@
     "open": "Punti aperti",
     "openHint": "Le cause ancora aperte trovate dall'analisi degli edge case (escluse quelle accettate).",
     "noOpen": "Nessun punto aperto."
+  },
+  "actions": {
+    "eyebrow": "Cascate",
+    "title": "Azioni",
+    "subtitle": "Per ogni azione, cosa fa succedere a cascata: effetti, azioni dei figli, e così via. Gli effetti si aggiungono qui e le transizioni dei figli le crea il tool.",
+    "search": "Cerca azione o entità",
+    "showCascade": "mostra anche quelle solo in cascata",
+    "none": "Nessuna azione.",
+    "generated": "generata",
+    "editEffects": "effetti",
+    "loop": "la cascata torna su questa azione: già mostrata più in alto",
+    "tooDeep": "cascata troppo profonda: aprila dall'elenco",
+    "sources": "da {states}",
+    "sourcesHint": "Gli stati del figlio da cui l'effetto deve funzionare: le transizioni che mancano le crea il tool",
+    "uncovered": "Il figlio può trovarsi anche in:",
+    "coverHint": "Da {state} l'effetto non ha una transizione: clicca per farla creare",
+    "covered": "Transizione aggiunta",
+    "noTarget": "Nessuna azione del figlio corrisponde a questo effetto.",
+    "noEffects": "Nessun effetto.",
+    "effectsOf": "Effetti di «{action}» ({entity})"
   },
   "exp": {
     "eyebrow": "Test di accettazione",
@@ -265,6 +300,7 @@
     "overview": "Panoramica",
     "invariants": "Invarianti",
     "simulator": "Simulatore",
+    "actions": "Azioni",
     "analysis": "Analisi edge case",
     "history": "Storico",
     "expectations": "Aspettative",
@@ -389,6 +425,8 @@
       "oneToMany": "Ogni {a} ha più {b}.",
       "manyToMany": "Più {a} sono legati a più {b}."
     },
+    "joinHint": "Per un legame molti-a-molti crea un'entità di join, figlia di entrambe.",
+    "manyToManyGone": "Le relazioni N-N non sono più ammesse: scegli 1-1 o 1-N, oppure usa «Risolvi» nell'analisi per creare l'entità di join.",
     "livenessEdit": "aggiungili nella scheda",
     "livenessInline": "Per ogni stato, scegli se l'entità è attiva, spenta (si riaccende) o eliminata (definitivo): la modifica si salva subito.",
     "noStates": "Ancora nessuno stato:",
@@ -622,8 +660,18 @@
       "activeOnly": "(ignorato se già in uno stato finale)",
       "createHint": "lo stato lo decidono le guardie di creazione",
       "skipFinal": "ignora se già finale",
-      "skipFinalHint": "Se l'entità è già in uno stato finale (es. CONFERMATA), l'effetto la lascia com'è invece di segnalare un conflitto. Utile nelle relazioni 1-N: l'effetto tocca solo le istanze ancora attive e salta quelle già chiuse."
+      "skipFinalHint": "Se l'entità è già in uno stato finale (es. CONFERMATA), l'effetto la lascia com'è invece di segnalare un conflitto. Utile nelle relazioni 1-N: l'effetto tocca solo le istanze ancora attive e salta quelle già chiuse.",
+      "generate": "crea le transizioni da:",
+      "suggest": "riproponi",
+      "manualHint": "le transizioni del figlio le scrivi tu, nella sua scheda",
+      "covered": "C'è già una transizione scritta a mano: «{action}»",
+      "willGenerate": "Da {state}: il tool crea una transizione «solo in cascata»",
+      "notFrom": "Da {state} l'effetto non deve funzionare: clicca per includerlo",
+      "noSources": "nessuno stato da cui partire"
     },
+    "generatedTag": "da «{action}» di {entity}",
+    "generatedHint": "Generata dall'effetto di un'altra azione: la crea e la toglie il tool. Apri l'azione d'origine nella pagina Azioni.",
+    "generatedEdit": "Generata dall'effetto di «{action}» ({entity}): stati e nome li decide quell'effetto. Qui puoi aggiungere guardie ed effetti.",
     "saveAction": "Salva azione",
     "actionSaved": "Azione salvata",
     "statesHintGone": "Per ogni stato indica se l'entità è attiva, spenta (recuperabile) o eliminata (definitivo).",

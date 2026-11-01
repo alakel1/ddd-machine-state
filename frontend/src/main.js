@@ -15,6 +15,7 @@ const router = createRouter({
     { path: '/d/:domainId/model', component: () => import('./views/ModelView.vue') },
     { path: '/d/:domainId/entity/:entityId', component: () => import('./views/EntityView.vue') },
     { path: '/d/:domainId/invariants', component: () => import('./views/InvariantsView.vue') },
+    { path: '/d/:domainId/actions', component: () => import('./views/ActionsView.vue') },
     { path: '/d/:domainId/simulator', component: () => import('./views/SimulatorView.vue') },
     { path: '/d/:domainId/analysis', component: () => import('./views/AnalysisView.vue') },
     { path: '/d/:domainId/history', component: () => import('./views/HistoryView.vue') },

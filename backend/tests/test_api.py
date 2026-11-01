@@ -33,6 +33,51 @@ def test_fix_preview_changes_nothing_and_fix_solves(client):
     assert missing["fingerprint"] not in {i["fingerprint"] for i in analysis(client)}
 
 
+def test_many_to_many_needs_a_join_entity(client):
+    from app import db
+    rel = model(client)["relations"][0]
+    body = {k: rel[k] for k in ("domain_id", "source_id", "target_id", "label")}
+    assert client.post("/api/relations", json={**body, "cardinality": "N-N"}).status_code == 400
+    assert client.put(f"/api/relations/{rel['id']}", json={"cardinality": "N-N"}).status_code == 400
+
+    with db.tx() as conn:  # una N-N arrivata da un vecchio import
+        conn.execute("UPDATE relations SET cardinality='N-N' WHERE id=?", (rel["id"],))
+    issue = next(i for i in analysis(client) if i.get("code") == "r.many_to_many")
+    client.post(f"/api/domains/{DOMAIN}/fix", json={"ops": issue["fixes"][0]["ops"]}).raise_for_status()
+    m = model(client)
+    join = next(e for e in m["entities"] if e["name"] == issue["fixes"][0]["ops"][0]["name"])
+    assert rel["id"] not in {r["id"] for r in m["relations"]}
+    assert sorted((r["source_id"], r["composition"]) for r in m["relations"] if r["target_id"] == join["id"]) == \
+        sorted([(rel["source_id"], 1), (rel["target_id"], 1)])
+    assert not [i for i in analysis(client) if i.get("code") == "r.many_to_many"]
+
+
+def test_effect_sources_generate_the_child_transitions(client):
+    """Un effetto con gli stati di partenza crea da solo le transizioni "solo in cascata" del figlio."""
+    m = model(client)
+    order, payment = m["entities"][0], m["entities"][1]
+    sid = {s["name"]: s["id"] for s in payment["states"]}
+    target = sid["ANNULLATO"]
+    covered = {t["from_state_id"] for t in payment["transitions"] if t["to_state_id"] == target}
+    sources = [s["id"] for s in payment["states"] if not s["is_final"] and s["id"] != target]
+    parent = next(t for t in order["transitions"] if t["kind"] != "create")
+    body = {**parent, "effects": [{"entity_id": payment["id"], "kind": "state", "to_state_id": target, "sources": sources}]}
+
+    def generated():
+        return {t["from_state_id"]: t for e in model(client)["entities"] for t in e["transitions"] if t.get("origin_effect_id")}
+
+    client.put(f"/api/transitions/{parent['id']}", json=body).raise_for_status()
+    gen = generated()
+    assert set(gen) == set(sources) - covered  # dove c'è già una transizione scritta a mano non si genera
+    assert all(t["cascade_only"] and t["action"] == parent["action"] and t["to_state_id"] == target for t in gen.values())
+
+    client.put(f"/api/transitions/{parent['id']}", json=body).raise_for_status()  # risalvare non le ricrea
+    assert {k: t["id"] for k, t in generated().items()} == {k: t["id"] for k, t in gen.items()}
+
+    client.put(f"/api/transitions/{parent['id']}", json={**parent, "effects": []}).raise_for_status()
+    assert not generated()
+
+
 def test_fix_rejects_rows_of_other_domains(client):
     r = client.post(f"/api/domains/{DOMAIN}/fix", json={"ops": [{"op": "delete", "table": "effects", "id": 999999}]})
     assert r.status_code == 400

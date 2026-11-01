@@ -11,8 +11,9 @@ const props = defineProps({ relation: Object, sourceId: Number })
 const emit = defineEmits(['close'])
 
 const m = computed(() => store.model)
-const CARDINALITIES = ['1-1', '1-N', 'N-N'] // niente N-1: il lato "1" è sempre il primo
-const CARD_HINT = { '1-1': 'oneToOne', '1-N': 'oneToMany', 'N-N': 'manyToMany' }
+// niente N-1 (il lato "1" è sempre il primo) e niente N-N: il legame si modella con un'entità di join
+const CARDINALITIES = ['1-1', '1-N']
+const CARD_HINT = { '1-1': 'oneToOne', '1-N': 'oneToMany' }
 
 function draftOf() {
   if (props.relation) return JSON.parse(JSON.stringify(props.relation))
@@ -64,11 +65,18 @@ async function save() {
         <div class="col-span-2"><label class="label">{{ $t('model.label') }}</label><input v-model="r.label" class="input" :placeholder="$t('model.labelPlaceholder')" /></div>
         <div>
           <label class="label">{{ $t('model.cardinality') }}</label>
-          <select v-model="r.cardinality" class="input"><option v-for="c in CARDINALITIES" :key="c">{{ c }}</option></select>
+          <select v-model="r.cardinality" class="input">
+            <option v-for="c in CARDINALITIES" :key="c">{{ c }}</option>
+            <option v-if="r.cardinality === 'N-N'" disabled>N-N</option>
+          </select>
         </div>
       </div>
-      <p class="text-xs text-zinc-500 -mt-1">
+      <p v-if="r.cardinality === 'N-N'" class="text-xs text-rose-700 -mt-1 flex gap-1.5">
+        <i class="fa-solid fa-triangle-exclamation mt-0.5" /> {{ $t('model.manyToManyGone') }}
+      </p>
+      <p v-else class="text-xs text-zinc-500 -mt-1">
         {{ $t(`model.cardinalityHint.${CARD_HINT[r.cardinality] || 'oneToMany'}`, { a: ename(r.source_id), b: ename(r.target_id) }) }}
+        {{ $t('model.joinHint') }}
       </p>
 
       <div class="rounded-xl ring-1 ring-zinc-200 p-4 space-y-4" :class="r.composition && 'bg-zinc-50/60'">

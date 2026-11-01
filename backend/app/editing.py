@@ -97,15 +97,65 @@ def delete_state(conn, state_id: int) -> None:
         if state != sc["state"]:
             db.update(conn, "scenarios", sc["id"], {"state": state})
     conn.execute("DELETE FROM states WHERE id=?", (state_id,))
+    sync_generated(conn, did)
 
 
 # ---------------------------------------------------------------- azioni
 def _clean_effect(f: dict) -> dict:
-    """Un effetto usa solo il campo del suo tipo: stato di arrivo, nome dell'azione o niente (nascita)."""
+    """Un effetto usa solo il campo del suo tipo: stato di arrivo (e stati di partenza), nome dell'azione o niente
+    (nascita)."""
     kind = f.get("kind") or "state"
+    sources = f.get("sources")
     return {**f, "kind": kind,
             "to_state_id": f.get("to_state_id") if kind == "state" else None,
-            "action": (f.get("action") or "").strip() if kind == "action" else ""}
+            "action": (f.get("action") or "").strip() if kind == "action" else "",
+            "sources": [int(s) for s in sources] if kind == "state" and sources is not None else None}
+
+
+def sync_generated(conn, domain_id: int | None) -> None:
+    """Allinea le transizioni generate dagli effetti: per ogni effetto "porta in stato" con stati di partenza
+    (sources), una transizione "solo in cascata" da ciascuno di quegli stati allo stato richiesto, se il figlio non
+    ne ha già una scritta a mano. Idempotente: si chiama dopo ogni modifica al modello.
+
+    Una transizione generata si riconosce dalla tripla (entità, da, a): se l'effetto viene risalvato (e cambia id)
+    resta la stessa riga, con gli eventuali effetti che le sono stati aggiunti; sparisce quando nessun effetto la
+    chiede più o quando una transizione scritta a mano la rende inutile."""
+    if domain_id is None:
+        return
+    states = {r["id"]: dict(r) for r in conn.execute(
+        "SELECT s.* FROM states s JOIN entities e ON e.id=s.entity_id WHERE e.domain_id=?", (domain_id,))}
+    trans = db.rows(conn, "transitions", "SELECT t.* FROM transitions t JOIN entities e ON e.id=t.entity_id "
+                                         "WHERE e.domain_id=? ORDER BY t.id", (domain_id,))
+    effects = db.rows(conn, "effects", "SELECT f.* FROM effects f JOIN transitions t ON t.id=f.transition_id "
+                                       "JOIN entities e ON e.id=t.entity_id WHERE e.domain_id=? ORDER BY f.id", (domain_id,))
+    by_id = {t["id"]: t for t in trans}
+    manual = {(t["entity_id"], t["from_state_id"], t["to_state_id"]) for t in trans
+              if not t["origin_effect_id"] and t["kind"] != "create"}
+    want = {}  # (entità, da, a) -> (effetto, nome dell'azione che la richiede)
+    for f in effects:
+        if f["kind"] != "state" or f["sources"] is None or f["to_state_id"] not in states:
+            continue
+        parent = by_id.get(f["transition_id"])
+        for s in f["sources"]:
+            st = states.get(s)
+            key = (f["entity_id"], s, f["to_state_id"])
+            if s == f["to_state_id"] or not st or st["entity_id"] != f["entity_id"] or st["is_final"]:
+                continue
+            if key in manual or (f["entity_id"], None, f["to_state_id"]) in manual or key in want:
+                continue
+            want[key] = (f["id"], parent["action"] if parent else "")
+    for t in trans:
+        if not t["origin_effect_id"]:
+            continue
+        w = want.pop((t["entity_id"], t["from_state_id"], t["to_state_id"]), None)
+        if w is None:
+            conn.execute("DELETE FROM transitions WHERE id=?", (t["id"],))
+        elif (t["origin_effect_id"], t["action"]) != w:
+            db.update(conn, "transitions", t["id"], {"origin_effect_id": w[0], "action": w[1]})
+    for (eid, src, dst), (fid, action) in want.items():
+        db.insert(conn, "transitions", {"entity_id": eid, "kind": "normal", "cascade_only": 1, "from_state_id": src,
+                                        "to_state_id": dst, "action": action, "actor": "", "description": "",
+                                        "origin_effect_id": fid})
 
 
 def save_transition(conn, data: dict, transition_id: int | None = None) -> int:
@@ -127,6 +177,7 @@ def save_transition(conn, data: dict, transition_id: int | None = None) -> int:
     for f in data.get("effects", []):
         f = {k: v for k, v in _clean_effect(f).items() if k != "id"}
         db.insert(conn, "effects", {**f, "transition_id": transition_id})
+    sync_generated(conn, domain_of(conn, "transitions", transition_id))
     return transition_id
 
 
@@ -168,6 +219,30 @@ def _check(conn, domain_id: int, table: str, id_) -> None:
         raise ValueError(f"{table} {id_}")
 
 
+def add_join(conn, domain_id: int, op: dict) -> int:
+    """Sostituisce una relazione N-N con un'entità di join: un solo stato (finale, finché non le si dà un ciclo di vita),
+    una creazione che richiede le due entità vive, e due composizioni 1-N da ciascuna verso la join.
+    Ritorna l'id della nuova entità."""
+    _check(conn, domain_id, "relations", op["relation_id"])
+    r = db.get(conn, "relations", op["relation_id"])
+    ends = [r["source_id"], r["target_id"]]
+    jid = create_entity(conn, {"domain_id": domain_id, "name": op["name"], "kind": "entity",
+                               "context": db.get(conn, "entities", ends[0]).get("context") or ""})
+    sid = create_state(conn, {"entity_id": jid, "name": op["state"], "liveness": "active", "is_final": 1})
+    guards = []
+    for p in dict.fromkeys(ends):
+        alive = [x[0] for x in conn.execute("SELECT id FROM states WHERE entity_id=? AND liveness<>'gone' ORDER BY pos", (p,))]
+        if alive:
+            guards.append({"kind": "state", "entity_id": p, "state_ids": alive, "negate": 0, "description": ""})
+    save_transition(conn, {"entity_id": jid, "kind": "create", "from_state_id": None, "to_state_id": sid,
+                           "action": op.get("create_action") or "create", "cascade_only": 0, "guards": guards, "effects": []})
+    for p in ends:
+        db.insert(conn, "relations", {"domain_id": domain_id, "source_id": p, "target_id": jid, "cardinality": "1-N",
+                                      "label": "", "composition": 1, "instances": 1})
+    conn.execute("DELETE FROM relations WHERE id=?", (r["id"],))
+    return jid
+
+
 def apply_ops(conn, domain_id: int, ops: list[dict]) -> None:
     """Applica le operazioni di una soluzione proposta dall'analisi (vedi fixes.py), tutte o nessuna."""
     for op in ops:
@@ -191,6 +266,8 @@ def apply_ops(conn, domain_id: int, ops: list[dict]) -> None:
             _check(conn, domain_id, "transitions", op["transition_id"])
             _check(conn, domain_id, "entities", op["entity_id"])
             db.insert(conn, "guards", {**{k: v for k, v in op.items() if k != "op"}, "kind": "state"})
+        elif kind == "add_join":
+            add_join(conn, domain_id, op)
         elif kind == "update" and op.get("table") in _UPDATABLE:
             _check(conn, domain_id, op["table"], op["id"])
             db.update(conn, op["table"], op["id"], op.get("data") or {})
@@ -199,3 +276,4 @@ def apply_ops(conn, domain_id: int, ops: list[dict]) -> None:
             conn.execute(f"DELETE FROM {op['table']} WHERE id=?", (op["id"],))
         else:
             raise ValueError(str(kind))
+    sync_generated(conn, domain_id)

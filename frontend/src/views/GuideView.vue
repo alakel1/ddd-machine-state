@@ -6,7 +6,7 @@ import PageHeader from '../components/PageHeader.vue'
 
 const TOPICS = [
   { group: 'model', items: ['entity', 'states', 'liveness', 'creation', 'actions', 'cascade'] },
-  { group: 'rules', items: ['guards', 'guardsOr', 'guardsEach', 'effects', 'skipFinal', 'composition', 'instances', 'invariants'] },
+  { group: 'rules', items: ['guards', 'guardsOr', 'guardsEach', 'effects', 'effectSources', 'actionTree', 'skipFinal', 'composition', 'join', 'instances', 'invariants'] },
   { group: 'analysis', items: ['analysis', 'missing', 'conflicts', 'deadlock', 'fix', 'ack', 'expectations', 'history'] },
 ]
 

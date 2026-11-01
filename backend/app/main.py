@@ -288,6 +288,15 @@ def delete_ack(domain_id: int, fingerprint: str):
     return {"ok": True}
 
 
+@app.post("/api/domains/{domain_id}/effect-sources")
+def effect_sources(domain_id: int, request: Request, payload: dict = Body(...)):
+    """Stati di partenza proposti per gli effetti: queries = [{owner_id, from, entity_id}], uno per effetto."""
+    lang = lang_of(request)
+    with db.tx() as conn:
+        eng = Engine(_model_or_404(conn, domain_id, lang), lang)
+    return eng.effect_sources(payload.get("queries") or [])
+
+
 @app.get("/api/domains/{domain_id}/matrix")
 def matrix(domain_id: int, a: int, b: int, request: Request):
     lang = lang_of(request)
@@ -406,24 +415,33 @@ def compare(domain_id: int, request: Request, base: int, target: int | None = No
 # fuori dallo storico: scenari del simulatore e aspettative (non fanno parte del modello);
 # un dominio nuovo non ha ancora storia e uno eliminato porta via anche la sua
 UNTRACKED = {"scenarios", "expectations"}
-def _check_table(table: str, request: Request):
+# tabelle da cui dipendono le transizioni generate dagli effetti (editing.sync_generated)
+SYNCED = {"effects", "transitions", "states", "entities"}
+def _check_table(table: str, request: Request, payload: dict | None = None):
     if table not in db.TABLES:
         raise HTTPException(404, translator(lang_of(request))("api.unknown_resource"))
+    # niente N-N: il legame si modella con un'entità di join (due relazioni 1-N)
+    if table == "relations" and (payload or {}).get("cardinality") == "N-N":
+        raise HTTPException(400, translator(lang_of(request))("api.many_to_many"))
 
 
 @app.post("/api/{table}")
 def create(table: str, request: Request, payload: dict = Body(...)):
-    _check_table(table, request)
+    _check_table(table, request, payload)
     with db.tx() as conn:
         if table not in UNTRACKED:
             _record(conn, request, editing.domain_of_payload(conn, payload), "create", table, _row_name(payload))
+        if table == "effects":
+            payload = editing._clean_effect(payload)
         new_id = db.insert(conn, table, payload)
+        if table in SYNCED:
+            editing.sync_generated(conn, editing.domain_of(conn, table, new_id))
         return db.get(conn, table, new_id)
 
 
 @app.put("/api/{table}/{id_}")
 def update(table: str, id_: int, request: Request, payload: dict = Body(...)):
-    _check_table(table, request)
+    _check_table(table, request, payload)
     with db.tx() as conn:
         row = db.get(conn, table, id_)
         if not row:
@@ -436,7 +454,11 @@ def update(table: str, id_: int, request: Request, payload: dict = Body(...)):
             conn.execute("UPDATE states SET is_initial=0 WHERE entity_id=? AND id<>?", (ent, id_))
         if table == "states" and "name" in payload:
             payload = {**payload, "name": editing.state_name(payload["name"])}
+        if table == "effects":
+            payload = editing._clean_effect({**row, **payload})
         db.update(conn, table, id_, payload)
+        if table in SYNCED:
+            editing.sync_generated(conn, editing.domain_of(conn, table, id_))
         return db.get(conn, table, id_)
 
 
@@ -444,9 +466,12 @@ def update(table: str, id_: int, request: Request, payload: dict = Body(...)):
 def delete(table: str, id_: int, request: Request):
     _check_table(table, request)
     with db.tx() as conn:
+        did = editing.domain_of(conn, table, id_) if table != "domains" else None
         if table not in UNTRACKED and table != "domains":
-            _record(conn, request, editing.domain_of(conn, table, id_), "delete", table, _row_name(db.get(conn, table, id_)))
+            _record(conn, request, did, "delete", table, _row_name(db.get(conn, table, id_)))
         conn.execute(f"DELETE FROM {table} WHERE id=?", (id_,))
+        if table in SYNCED:
+            editing.sync_generated(conn, did)
     return {"ok": True}
 
 

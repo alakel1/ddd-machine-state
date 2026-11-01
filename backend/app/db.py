@@ -60,7 +60,8 @@ CREATE TABLE IF NOT EXISTS transitions (
     to_state_id INTEGER NOT NULL REFERENCES states(id) ON DELETE CASCADE,
     action TEXT NOT NULL,
     actor TEXT NOT NULL DEFAULT '',
-    description TEXT NOT NULL DEFAULT ''
+    description TEXT NOT NULL DEFAULT '',
+    origin_effect_id INTEGER  -- ≠ NULL: generata dall'effetto (vedi effects.sources), la mantiene il tool
 );
 
 -- kind=state: l'entità entity_id deve (negate=0) / non deve (negate=1) trovarsi in uno di state_ids
@@ -91,7 +92,10 @@ CREATE TABLE IF NOT EXISTS effects (
     to_state_id INTEGER REFERENCES states(id) ON DELETE CASCADE,
     action TEXT NOT NULL DEFAULT '',
     skip_final INTEGER NOT NULL DEFAULT 0,  -- 1 = "su tutte le istanze attive": ignora quelle in stato finale
-    description TEXT NOT NULL DEFAULT ''
+    description TEXT NOT NULL DEFAULT '',
+    -- kind=state: stati di entity_id da cui l'effetto deve funzionare (JSON); il tool genera le transizioni
+    -- "solo in cascata" che mancano. NULL = le transizioni del figlio si scrivono a mano
+    sources TEXT
 );
 
 CREATE TABLE IF NOT EXISTS relations (
@@ -176,10 +180,12 @@ TABLES = {
     "entities": {"fields": ["domain_id", "name", "description", "kind", "context", "color", "pos"], "json": []},
     "attributes": {"fields": ["entity_id", "name", "type", "required", "description"], "json": []},
     "states": {"fields": ["entity_id", "name", "description", "is_initial", "is_final", "liveness", "pos"], "json": []},
-    "transitions": {"fields": ["entity_id", "kind", "cascade_only", "from_state_id", "to_state_id", "action", "actor", "description"], "json": []},
+    "transitions": {"fields": ["entity_id", "kind", "cascade_only", "from_state_id", "to_state_id", "action", "actor", "description",
+                               "origin_effect_id"], "json": []},
     "guards": {"fields": ["transition_id", "kind", "entity_id", "state_ids", "negate", "description", "each_entity_id",
                           "alt_group"], "json": ["state_ids"]},
-    "effects": {"fields": ["transition_id", "entity_id", "kind", "to_state_id", "action", "skip_final", "description"], "json": []},
+    "effects": {"fields": ["transition_id", "entity_id", "kind", "to_state_id", "action", "skip_final", "description", "sources"],
+                "json": ["sources"]},
     "relations": {"fields": ["domain_id", "source_id", "target_id", "cardinality", "label", "composition", "instances"],
                   "json": []},
     "invariants": {"fields": ["domain_id", "name", "description", "severity", "rules"], "json": ["rules"]},
@@ -248,6 +254,8 @@ MIGRATIONS = [
     ("states", "liveness", _states_liveness),
     ("guards", "each_entity_id", "ALTER TABLE guards ADD COLUMN each_entity_id INTEGER REFERENCES entities(id) ON DELETE SET NULL"),
     ("guards", "alt_group", "ALTER TABLE guards ADD COLUMN alt_group INTEGER NOT NULL DEFAULT 0"),
+    ("effects", "sources", "ALTER TABLE effects ADD COLUMN sources TEXT"),
+    ("transitions", "origin_effect_id", "ALTER TABLE transitions ADD COLUMN origin_effect_id INTEGER"),
 ]
 
 

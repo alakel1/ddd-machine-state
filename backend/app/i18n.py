@@ -134,6 +134,9 @@ MESSAGES = {
         "fx.guard_child.detail": "Aggiunge a {action} la guardia: {parent} in {states}.",
         "fx.guard_parent_alive.title": "Richiedi che {parent} esista per «{action}»",
         "fx.guard_parent_alive.detail": "Aggiunge a «{action}» la guardia: {parent} in {states}.",
+        "fx.join.title": "Crea l'entità di join «{name}»",
+        "fx.join.detail": "Al posto della N-N: nuova entità «{name}» (stato {state}, creazione che richiede {a} e {b}), figlia di {a} e di {b} con due composizioni 1-N.",
+        "fx.join_state": "ATTIVO",
         "fx.uncompose.title": "Togli la composizione tra {parent} e {child}",
         "fx.uncompose.detail": "La relazione resta, ma {child} non segue più la vita di {parent}: può sopravvivergli o restare attivo quando è spento.",
         "fx.guard_invariant.title": "Impedisci «{action}» di {owner} in questa situazione",
@@ -220,6 +223,8 @@ MESSAGES = {
         "r.derived.name": "{child} esiste ancora dopo l'eliminazione di {parent}",
         "r.derived.desc": "Composizione: l'eliminazione di {parent} deve eliminare anche {child}.",
         "r.instance_inv": "{name} (istanza #{i})",
+        "r.many_to_many.title": "Relazione N-N tra {a} e {b}: serve un'entità di join",
+        "r.many_to_many.detail": "Il legame tra un {a} e un {b} ha quasi sempre stati e regole suoi: modellalo come entità, figlia di entrambe con due relazioni 1-N.",
         "r.always_exists.title": "{child} esiste sempre: la composizione con {parent} non è verificabile",
         "r.always_exists.detail": "{child} non ha azioni di creazione, quindi per il tool esiste fin dall'inizio. "
                                   "Aggiungi una creazione per poter controllare che non nasca senza {parent}.",
@@ -287,6 +292,7 @@ MESSAGES = {
         "api.copy": "{name} (copia)",
         "api.imported": "Dominio importato",
         "api.bad_fix": "Soluzione non applicabile: il modello è cambiato, rilancia l'analisi",
+        "api.many_to_many": "Le relazioni N-N non sono ammesse: crea un'entità di join legata alle due con relazioni 1-N.",
     },
     "en": {
         "none_state": "DOES_NOT_EXIST",
@@ -406,6 +412,9 @@ MESSAGES = {
         "fx.guard_child.detail": "Adds to {action} the guard: {parent} in {states}.",
         "fx.guard_parent_alive.title": "Require {parent} to exist for “{action}”",
         "fx.guard_parent_alive.detail": "Adds to “{action}” the guard: {parent} in {states}.",
+        "fx.join.title": "Create the join entity “{name}”",
+        "fx.join.detail": "Instead of the N-N: new entity “{name}” (state {state}, a creation that requires {a} and {b}), child of {a} and {b} through two 1-N compositions.",
+        "fx.join_state": "ACTIVE",
         "fx.uncompose.title": "Remove the composition between {parent} and {child}",
         "fx.uncompose.detail": "The relation stays, but {child} no longer follows the life of {parent}: it can outlive it or stay active when it is off.",
         "fx.guard_invariant.title": "Prevent “{action}” of {owner} in this situation",
@@ -489,6 +498,8 @@ MESSAGES = {
         "r.derived.name": "{child} still exists after {parent} is deleted",
         "r.derived.desc": "Composition: when {parent} is deleted, {child} must be deleted too.",
         "r.instance_inv": "{name} (instance #{i})",
+        "r.many_to_many.title": "N-N relation between {a} and {b}: a join entity is needed",
+        "r.many_to_many.detail": "The link between a {a} and a {b} almost always has its own states and rules: model it as an entity, child of both through two 1-N relations.",
         "r.always_exists.title": "{child} always exists: the composition with {parent} cannot be checked",
         "r.always_exists.detail": "{child} has no creation actions, so the tool assumes it exists from the start. "
                                   "Add a creation action to check that it is never created without {parent}.",
@@ -554,6 +565,7 @@ MESSAGES = {
         "api.copy": "{name} (copy)",
         "api.imported": "Imported domain",
         "api.bad_fix": "This fix can't be applied: the model has changed, run the analysis again",
+        "api.many_to_many": "N-N relations are not allowed: create a join entity linked to both with 1-N relations.",
     },
 }
 

@@ -99,5 +99,13 @@ export function stateById(id) {
 export const sname = (id) => (id == null ? '∗' : stateById(id)?.name ?? '?')
 export const ename = (id) => entity(id)?.name ?? '?'
 // stati eliminati (NON_ESISTE compreso) e spenti dell'entità: li calcola il backend con le regole del motore
+// transizione generata da un effetto: l'azione che la richiede, con la sua entità (null se scritta a mano)
+export function originOf(tr) {
+  if (!tr?.origin_effect_id) return null
+  for (const e of store.model?.entities || []) {
+    for (const x of e.transitions) if (x.effects.some((f) => f.id === tr.origin_effect_id)) return { transition: x, entity: e }
+  }
+  return null
+}
 export const goneStates = (e) => e?.gone_states ?? [NONE]
 export const offStates = (e) => e?.off_states ?? []

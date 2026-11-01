@@ -1,7 +1,7 @@
 <script setup>
 import { computed, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { store, api, reloadModel, mutate, entity, ename, sname, toast, isCreatable, goneStates, offStates, plainTitle } from '../store'
+import { store, api, reloadModel, mutate, entity, ename, sname, toast, goneStates, offStates, plainTitle, originOf } from '../store'
 import { pal, KINDS, COLORS, PALETTE } from '../colors'
 import { t } from '../i18n'
 import { stateDiagram, contextMap, neighborhood } from '../diagrams'
@@ -15,6 +15,7 @@ import FixModal from '../components/FixModal.vue'
 import AckBadge from '../components/AckBadge.vue'
 import { guardText, effectText, isAlternative } from '../texts'
 import HelpLink from '../components/HelpLink.vue'
+import EffectEditor from '../components/EffectEditor.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -132,17 +133,14 @@ function addGuard(kind) {
     ? { kind: 'rule', description: '', state_ids: [], negate: 0, entity_id: null }
     : { kind: 'state', entity_id: others.value[0]?.id ?? e.value.id, state_ids: [], negate: 0, description: '', each_entity_id: null })
 }
+let effectKey = 0
 function addEffect() {
   const target = others.value[0]
-  draft.value.effects.push({ entity_id: target?.id, kind: 'state', to_state_id: target?.states[0]?.id, action: '', skip_final: 0, description: '' })
+  // nuovo effetto: gli stati di partenza li propone l'esplorazione (EffectEditor)
+  draft.value.effects.push({ entity_id: target?.id, kind: 'state', to_state_id: target?.states[0]?.id, action: '', skip_final: 0,
+    description: '', sources: [], _suggest: true, _key: `new${++effectKey}` })
 }
-function resetEffect(f) {
-  f.kind = 'state'
-  f.to_state_id = entity(f.entity_id)?.states[0]?.id
-  f.action = ''
-}
-// nomi delle azioni (non di creazione) che un effetto può far eseguire all'entità
-const actionsOf = (eid) => [...new Set((entity(eid)?.transitions || []).filter((tr) => tr.kind !== 'create').map((tr) => tr.action))]
+const draftOrigin = computed(() => draft.value && originOf(draft.value))
 function setAlternative(i, on) {
   const guards = draft.value.guards
   const g = guards[i], prev = guards[i - 1]
@@ -547,12 +545,16 @@ function changeGuardEntity(g) {
                 <i class="fa-solid fa-arrow-right fa-fw text-[12px] text-zinc-300" />
                 <StateChip :id="t.to_state_id" />
                 <span v-if="t.actor" class="tag bg-zinc-50 text-zinc-500 ring-zinc-200"><i class="fa-solid fa-user fa-fw text-[11px]" />{{ t.actor }}</span>
-                <span v-if="t.cascade_only" class="tag bg-amber-50 text-amber-800 ring-amber-200" :title="$t('entity.cascadeOnlyHint')">
+                <RouterLink v-if="originOf(t)" :to="`/d/${m.id}/actions?t=${originOf(t).transition.id}`"
+                            class="tag bg-amber-50 text-amber-800 ring-amber-200 hover:ring-amber-400" :title="$t('entity.generatedHint')">
+                  <i class="fa-solid fa-wand-magic-sparkles" /> {{ $t('entity.generatedTag', { action: originOf(t).transition.action, entity: originOf(t).entity.name }) }}
+                </RouterLink>
+                <span v-else-if="t.cascade_only" class="tag bg-amber-50 text-amber-800 ring-amber-200" :title="$t('entity.cascadeOnlyHint')">
                   <i class="fa-solid fa-arrows-turn-right" /> {{ $t('entity.cascadeOnlyTag') }}
                 </span>
                 <div class="flex-1" />
                 <button class="icon-btn opacity-0 group-hover:opacity-100" @click="openTransition(t)"><i class="fa-solid fa-pen fa-fw text-[12px]" /></button>
-                <button class="icon-btn opacity-0 group-hover:opacity-100 hover:!text-rose-600" @click="removeTransition(t)"><i class="fa-solid fa-trash-can fa-fw text-[12px]" /></button>
+                <button v-if="!t.origin_effect_id" class="icon-btn opacity-0 group-hover:opacity-100 hover:!text-rose-600" @click="removeTransition(t)"><i class="fa-solid fa-trash-can fa-fw text-[12px]" /></button>
               </div>
               <p v-if="t.description" class="text-xs text-zinc-500 mt-1.5">{{ t.description }}</p>
               <div v-if="t.guards.length || t.effects.length" class="mt-2 flex flex-wrap gap-1.5">
@@ -699,27 +701,31 @@ function changeGuardEntity(g) {
         <div class="grid grid-cols-[1fr_auto_1.3fr_auto_1fr] items-end gap-3">
           <div>
             <label class="label">{{ $t('entity.fromState') }}</label>
-            <select v-model="fromSel" class="input font-mono">
+            <select v-model="fromSel" class="input font-mono" :disabled="!!draftOrigin">
               <option value="create">{{ $t('entity.fromCreate') }}</option>
               <option :value="null">{{ $t('entity.fromAny') }}</option>
               <option v-for="s in e.states" :key="s.id" :value="s.id">{{ s.name }}</option>
             </select>
           </div>
           <i class="fa-solid fa-arrow-right fa-fw text-[14px] text-zinc-300 mb-2.5" />
-          <div><label class="label">{{ $t('entity.action') }}</label><input v-model="draft.action" class="input font-medium" :placeholder="$t('entity.actionPlaceholder')" required /></div>
+          <div><label class="label">{{ $t('entity.action') }}</label><input v-model="draft.action" class="input font-medium" :placeholder="$t('entity.actionPlaceholder')" required :disabled="!!draftOrigin" /></div>
           <i class="fa-solid fa-arrow-right fa-fw text-[14px] text-zinc-300 mb-2.5" />
           <div>
             <label class="label">{{ $t('entity.toState') }}</label>
-            <select v-model="draft.to_state_id" class="input font-mono"><option v-for="s in e.states" :key="s.id" :value="s.id">{{ s.name }}</option></select>
+            <select v-model="draft.to_state_id" class="input font-mono" :disabled="!!draftOrigin"><option v-for="s in e.states" :key="s.id" :value="s.id">{{ s.name }}</option></select>
           </div>
         </div>
+        <p v-if="draftOrigin" class="text-xs rounded-lg bg-amber-50 text-amber-900 ring-1 ring-amber-200 px-3 py-2 flex gap-1.5">
+          <i class="fa-solid fa-wand-magic-sparkles mt-0.5" />
+          <span>{{ $t('entity.generatedEdit', { action: draftOrigin.transition.action, entity: draftOrigin.entity.name }) }}</span>
+        </p>
         <div class="grid grid-cols-3 gap-3">
           <div><label class="label">{{ $t('entity.actor') }}</label><input v-model="draft.actor" class="input" :placeholder="$t('entity.actorPlaceholder')" list="actors" />
             <datalist id="actors"><option v-for="a in [...new Set(m.entities.flatMap((x) => x.transitions.map((t) => t.actor)).filter(Boolean))]" :key="a" :value="a" /></datalist>
           </div>
           <div class="col-span-2"><label class="label">{{ $t('common.description') }}</label><input v-model="draft.description" class="input" /></div>
         </div>
-        <label class="flex items-start gap-2.5 rounded-xl ring-1 ring-zinc-200 p-3 cursor-pointer hover:bg-zinc-50 transition">
+        <label v-if="!draftOrigin" class="flex items-start gap-2.5 rounded-xl ring-1 ring-zinc-200 p-3 cursor-pointer hover:bg-zinc-50 transition">
           <input type="checkbox" class="accent-indigo-600 mt-0.5" :checked="!!draft.cascade_only" @change="(ev) => (draft.cascade_only = ev.target.checked ? 1 : 0)" />
           <span>
             <span class="text-sm font-medium flex items-center gap-1.5"><i class="fa-solid fa-arrows-turn-right text-amber-500" /> {{ $t('entity.cascadeOnly') }} <HelpLink topic="cascade" /></span>
@@ -797,30 +803,8 @@ function changeGuardEntity(g) {
             <button type="button" class="btn-ghost !text-xs" :disabled="!others.length" @click="addEffect"><i class="fa-solid fa-plus fa-fw text-[12px]" /> {{ $t('entity.effect.add') }}</button>
           </div>
           <div class="space-y-2">
-            <div v-for="(f, i) in draft.effects" :key="i" class="flex items-center gap-2 rounded-xl ring-1 ring-amber-200 bg-amber-50/40 p-3">
-              <select v-model="f.entity_id" class="input !w-44 !py-1.5" @change="resetEffect(f)">
-                <option v-for="x in others" :key="x.id" :value="x.id">{{ x.name }}</option>
-              </select>
-              <select v-model="f.kind" class="input !w-40 !py-1.5">
-                <option value="state">{{ $t('entity.effect.toState') }}</option>
-                <option value="action">{{ $t('entity.effect.runsAction') }}</option>
-                <option v-if="isCreatable(entity(f.entity_id))" value="create">{{ $t('entity.effect.created') }}</option>
-              </select>
-              <select v-if="f.kind === 'state'" v-model="f.to_state_id" class="input !w-48 !py-1.5 font-mono">
-                <option v-for="s in entity(f.entity_id)?.states || []" :key="s.id" :value="s.id">{{ s.name }}</option>
-              </select>
-              <select v-else-if="f.kind === 'action'" v-model="f.action" class="input !w-48 !py-1.5">
-                <option v-for="a in actionsOf(f.entity_id)" :key="a" :value="a">{{ a }}</option>
-              </select>
-              <span v-else class="w-48 text-xs text-zinc-500 px-1">{{ $t('entity.effect.createHint') }}</span>
-              <label v-if="f.kind !== 'create'" class="flex items-center gap-1.5 text-xs text-zinc-600 whitespace-nowrap cursor-pointer"
-                     :title="$t('entity.effect.skipFinalHint')">
-                <input type="checkbox" :checked="!!f.skip_final" class="accent-indigo-600" @change="(ev) => (f.skip_final = ev.target.checked ? 1 : 0)" />
-                {{ $t('entity.effect.skipFinal') }} <HelpLink topic="skipFinal" />
-              </label>
-              <input v-model="f.description" class="input !py-1.5 flex-1" :placeholder="$t('common.notes').toLowerCase()" />
-              <button type="button" class="icon-btn hover:!text-rose-600" @click="draft.effects.splice(i, 1)"><i class="fa-solid fa-xmark fa-fw text-[14px]" /></button>
-            </div>
+            <EffectEditor v-for="(f, i) in draft.effects" :key="f.id ?? f._key" :f="f" :owner="e.id" :entities="others"
+                          :from="draft.kind === 'create' ? 0 : draft.from_state_id" @remove="draft.effects.splice(i, 1)" />
           </div>
         </div>
       </form>

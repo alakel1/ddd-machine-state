@@ -22,6 +22,9 @@ The errors the analysis finds on the entity are shown right on top, each with wh
 
 ![Entity editor](docs/screenshots/entity.png)
 
+### Actions and cascades
+A cascade is declared in one place: on a "moves to state" effect you pick the child's states it must work from (suggested from the reachable combinations), and the tool creates and maintains the child's cascade-only transitions, named after the action that needs them. The **Actions** page shows each action's whole cascade tree (effects → the children's actions → …), lets you add or remove effects, and highlights in red the states an effect has no transition from: one click covers them.
+
 ### Simulator
 Set any combination of states, even ones that "shouldn't happen", and see which actions are enabled, blocked (and why) or in conflict. Execute, force, undo, save scenarios, and replay any path found by the analysis step by step.
 
@@ -74,8 +77,9 @@ A built-in guide explains every concept of the model with an example; the "?" ne
 | **Action** | A transition `from → to` (from "any" = from every non-final state), with an actor |
 | **State guard** | Precondition: another entity must (or must not) be in given states. Guards can be alternatives (OR), and on a composition child they can apply **for each** parent ("every order has at least one available line") |
 | **Rule** | Free-text business condition, shown as "to be verified" |
-| **Cascading effect** | The action forces another entity to change state, run an action or be created. If no valid transition exists, it's a **conflict** |
+| **Cascading effect** | The action forces another entity to change state, run an action or be created. If no valid transition exists, it's a **conflict**. A state effect can list the child's starting states: the matching transitions are then generated |
 | **Invariant** | A forbidden combination of states (AND of conditions); may use `DOES_NOT_EXIST` |
+| **Relation** | 1-1 or 1-N between two entities. A many-to-many link is modelled as a **join entity**, child of both, since it usually has its own states and rules (an imported N-N is flagged, and Fix creates the join entity) |
 | **Composition** | The child cannot exist without the parent. Two invariants follow: a child must be deleted when the parent is deleted (or does not exist), and cannot stay active when the parent is off. The tool also checks that creating the child requires the parent, and that the actions deleting or turning off the parent take care of the children |
 | **Multiple instances** | On a composition, simulate 2–3 children per parent in the analysis (e.g. "one item confirmed, the other deleted") |
 
@@ -133,8 +137,8 @@ backend/app/
   seed.py          example domain
 backend/tests/     engine and API tests (pytest)
 frontend/src/
-  views/           Home, Model, Entity, Invariants, Simulator, Analysis, Expectations, History, Spec, Guide
-  components/      Mermaid, FixModal, AckBadge, HelpLink, StateChip, StatePicker, Trace, Modal, PageHeader
+  views/           Home, Model, Entity, Invariants, Actions, Simulator, Analysis, Expectations, History, Spec, Guide
+  components/      Mermaid, FixModal, EffectEditor, ActionNode, AckBadge, HelpLink, StateChip, StatePicker, Trace, Modal, PageHeader
   locales/         UI translations (en.json, it.json)
   diagrams.js      Mermaid generators (state diagram, context map)
   store.js         reactive store and API client

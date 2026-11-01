@@ -236,6 +236,14 @@ def relation_issues(model: dict, sname, t=None) -> list[dict]:
             return False
         return (NONE in g["state_ids"]) if g["negate"] else (NONE not in g["state_ids"] and bool(g["state_ids"]))
 
+    # --- N-N: il legame ha quasi sempre un suo ciclo di vita, quindi va modellato come entità di join ---
+    for r in model.get("relations", []):
+        a, b = ent.get(r["source_id"]), ent.get(r["target_id"])
+        if r.get("cardinality") == "N-N" and a and b:
+            add("error", "relations", t("r.many_to_many.title", a=a["name"], b=b["name"]),
+                t("r.many_to_many.detail", a=a["name"], b=b["name"]), relation_id=r["id"],
+                entity_ids=[a["id"], b["id"]], code="r.many_to_many")
+
     # --- composizioni ---
     for r in compositions(model):
         parent, child = ent.get(r["source_id"]), ent.get(r["target_id"])
