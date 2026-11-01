@@ -5,18 +5,22 @@ POST /api/domains/{id}/fix applica in una sola transazione (editing.apply_ops). 
 correzioni ricavate da dati certi: l'effetto che fallisce, la guardia che blocca, l'ultima azione del
 percorso che porta all'invariante violata. Quando non ce ne sono, la lista è vuota e resta la spiegazione.
 """
-from .relations import NONE, gone_states
+from .relations import NONE, gone_states, is_create
 
 # ---------------------------------------------------------------- operazioni
 
 
-def op_add_transition(eid, src, dst, action, cascade_only=1, guards=()):
+def op_add_transition(eid, src, dst, action, cascade_only=1, guards=(), kind="normal"):
     return {"op": "add_transition", "entity_id": eid, "from_state_id": src, "to_state_id": dst,
-            "action": action, "cascade_only": cascade_only, "guards": list(guards)}
+            "action": action, "cascade_only": cascade_only, "guards": list(guards), "kind": kind}
 
 
 def op_add_effect(tid, eid, dst):
     return {"op": "add_effect", "transition_id": tid, "entity_id": eid, "kind": "state", "to_state_id": dst, "skip_final": 1}
+
+
+def op_add_create_effect(tid, eid):
+    return {"op": "add_effect", "transition_id": tid, "entity_id": eid, "kind": "create", "skip_final": 0}
 
 
 def op_add_guard(tid, eid, state_ids, negate=0, description=""):
@@ -150,14 +154,31 @@ def _invariant_fixes(x: _Ctx, issue, inv, tbase):
         if not rel:
             return []
         parent, child, kind = rel["source_id"], rel["target_id"], inv["kind"]
+        births = [t for t in e.entity[parent]["transitions"] if is_create(t)]
+        if not trace and kind == "gone" and births and not any(is_create(t) for t in e.entity[child]["transitions"]):
+            # violata già all'inizio: il figlio non ha azioni di creazione, quindi esiste dallo stato iniziale anche
+            # quando il padre non c'è ancora. Nasce insieme al padre
+            start = next((s["id"] for s in e.entity[child]["states"] if s["is_initial"]), None) \
+                or next((s["id"] for s in e.entity[child]["states"]), None)
+            if start is not None:
+                name = e.t("fx.create_name")
+                ops = [op_add_transition(child, None, start, name, kind="create")]
+                ops += [op_add_create_effect(t["id"], child) for t in births]
+                out.append(x.fix("born_with_parent", ops, child=e.ename(child), parent=e.ename(parent),
+                                 state=e.sname(start), name=name,
+                                 actions=", ".join(e.t("q", x=t["action"]) for t in births)))
         if last and last["entity_id"] == parent:
             out += _composition_effect(x, rel, kind, last)
         elif last and last["entity_id"] == child:
             allowed = x.alive_states(parent) if kind == "gone" else x.active_ids(parent)
+            # se è una creazione, la stessa guardia serve a tutte le creazioni del figlio che non guardano il padre:
+            # altrimenti l'analisi trova la stessa violazione dall'altra strada
+            same = [last] + [t for t in e.entity[child]["transitions"] if is_create(last) and is_create(t)
+                             and t["id"] != last["id"] and not any(g.get("entity_id") == parent for g in t["guards"])]
             if allowed:
-                out.append(x.fix("guard_child", [op_add_guard(last["id"], parent, allowed)], child=e.ename(child),
-                                 parent=e.ename(parent), action=last["action"], states=x.states(allowed),
-                                 status=e.t(f"fx.status.{kind}")))
+                out.append(x.fix("guard_child", [op_add_guard(t["id"], parent, allowed) for t in same], child=e.ename(child),
+                                 parent=e.ename(parent), action=", ".join(e.t("q", x=t["action"]) for t in same),
+                                 states=x.states(allowed), status=e.t(f"fx.status.{kind}")))
         out.append(_uncompose(x, rel))
         return out
     # invariante dell'utente con due condizioni: l'ultima azione porta la sua entità nella combinazione vietata,

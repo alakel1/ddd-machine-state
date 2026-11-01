@@ -80,6 +80,19 @@ def test_children_of_a_concluded_parent_are_not_stuck(model):
     assert [i for i in Engine(model.m, "en").analyze()["issues"] if i["category"] == "deadlock"]
 
 
+def test_child_without_creation_is_born_with_its_parent(model):
+    """Un figlio senza azioni di creazione esiste dall'inizio, anche senza padre: la soluzione lo fa nascere col padre."""
+    model.entity("Tender", ["DRAFT"])
+    model.entity("Phase", ["ENABLED"], initial="ENABLED")
+    create = model.transition("Tender", None, "DRAFT", "create", create=True)
+    model.relation("Tender", "Phase")
+    inv = next(i for i in Engine(model.m, "en").analyze()["issues"] if i["category"] == "invariants")
+    assert inv["trace"] == []  # violata già nello stato iniziale
+    fix = next(f for f in inv["fixes"] if f["key"] == "born_with_parent")
+    assert [(o["op"], o.get("kind")) for o in fix["ops"]] == [("add_transition", "create"), ("add_effect", "create")]
+    assert fix["ops"][1]["transition_id"] == create
+
+
 def _checkout_model(model):
     """Carrello → Ordine → Riga: confermare il carrello richiede che ogni ordine abbia una riga."""
     model.entity("Cart", ["OPEN", "CHECKED_OUT"], initial="OPEN", final=["CHECKED_OUT"])
