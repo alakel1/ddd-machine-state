@@ -128,7 +128,7 @@
     },
     "deadlock": {
       "title": "Deadlock",
-      "body": "A combination where no action can run and some entity is not concluded. It is often a consequence of other causes: replay the path in the simulator to see which guard stops the actions.",
+      "body": "A combination where no action can run and some entity is not concluded. A composition child whose parent is concluded (final state) does not count: once the aggregate is closed, its parts stay as they are. It is often a consequence of other causes: replay the path in the simulator to see which guard stops the actions.",
       "example": "Shipment LOST with no outgoing action."
     },
     "fix": {

@@ -63,6 +63,23 @@ def test_deadlock_names_its_cause_and_offers_a_way_out(model):
     assert op["guards"] == [{"entity_id": model.eid("Shipment"), "state_ids": [model.s("Shipment", "LOST")]}]
 
 
+def test_children_of_a_concluded_parent_are_not_stuck(model):
+    """Chiuso l'ordine (stato finale), le sue righe restano come sono: non è un deadlock, anche con più istanze."""
+    model.entity("Order", ["NEW", "OPEN", "CLOSED"], initial="NEW", final=["CLOSED"])
+    model.entity("Line", ["DRAFT", "READY", "SHIPPED"], initial="DRAFT", final=["SHIPPED"])
+    model.transition("Order", "NEW", "OPEN", "open")
+    model.transition("Order", "OPEN", "CLOSED", "close")
+    model.transition("Line", "DRAFT", "READY", "prepare")
+    model.transition("Line", "READY", "SHIPPED", "ship",
+                     guards=[{"entity_id": model.eid("Order"), "state_ids": [model.s("Order", "OPEN")]}])
+    model.relation("Order", "Line", instances=2)
+    assert not [i for i in Engine(model.m, "en").analyze()["issues"] if i["category"] == "deadlock"]
+
+    model.relation("Order", "Line", composition=False)  # senza composizione la riga READY resta davvero bloccata
+    model.m["relations"] = model.m["relations"][-1:]
+    assert [i for i in Engine(model.m, "en").analyze()["issues"] if i["category"] == "deadlock"]
+
+
 def _checkout_model(model):
     """Carrello → Ordine → Riga: confermare il carrello richiede che ogni ordine abbia una riga."""
     model.entity("Cart", ["OPEN", "CHECKED_OUT"], initial="OPEN", final=["CHECKED_OUT"])

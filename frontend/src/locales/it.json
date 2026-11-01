@@ -128,7 +128,7 @@
     },
     "deadlock": {
       "title": "Deadlock",
-      "body": "Una combinazione in cui nessuna azione è eseguibile e qualche entità non è conclusa. Spesso è la conseguenza di altre cause: si riproduce il percorso nel simulatore per vedere quale guardia ferma le azioni.",
+      "body": "Una combinazione in cui nessuna azione è eseguibile e qualche entità non è conclusa. Un figlio in composizione il cui padre è concluso (stato finale) non conta: chiuso l'aggregato, le sue parti restano come sono. Spesso è la conseguenza di altre cause: si riproduce il percorso nel simulatore per vedere quale guardia ferma le azioni.",
       "example": "Spedizione SMARRITA senza nessuna azione in uscita."
     },
     "fix": {

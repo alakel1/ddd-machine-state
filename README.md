@@ -33,7 +33,7 @@ A breadth-first model checker over the global state space (up to 1,000,000 combi
 - **Violable invariants**: a sequence of actions reaches a forbidden combination
 - **Blocked cascades**: a cascade asks an entity for a transition it can't make, with a suggested fix
 - **Missing transitions**: grouped per entity, with the actions that need them
-- **Deadlocks**: non-final entities with no enabled action
+- **Deadlocks**: non-final entities with no enabled action (children of a concluded aggregate don't count), with the guard or action that caused them
 - **Unreachable states** and **dead actions**
 - **Non-determinism**: the same action leading to different states
 - **Creations that skip checks** the normal path enforces

@@ -17,7 +17,7 @@ from operator import itemgetter
 
 from .fixes import fixes_for
 from .i18n import translator
-from .relations import derived_invariants, expand, gone_states, relation_issues
+from .relations import _vid, compositions, derived_invariants, expand, gone_states, relation_issues
 
 NONE = 0  # stato implicito "non esiste" (gli id SQLite partono da 1)
 MAX_CASCADE_DEPTH = 8
@@ -78,6 +78,31 @@ class Engine:
         self.creatable = {e["id"] for e in self.entities if any(is_create(t) for t in e["transitions"])}
         # stati "di riposo" che non contano come blocco: NONE e l'iniziale delle entità non creabili
         self.resting = {NONE} | {sid for eid, sid in self.initial_state().items() if eid not in self.creatable}
+        # padri in composizione di ogni entità; nel modello espanso la copia i di un figlio ha come padre la copia i
+        # (se il padre è duplicato) o il padre singolo
+        self.parents = {}
+        for r in compositions(self.model):
+            for eid in self.entity:
+                b, i = (-eid // 10, -eid % 10) if eid < 0 else (eid, 1)
+                if b == r["target_id"] and r["source_id"] != b:
+                    copies = [x for x in (_vid(r["source_id"], j) for j in range(1, 4)) if x in self.entity]
+                    same = _vid(r["source_id"], i)
+                    self.parents.setdefault(eid, []).extend([same] if same in copies and len(copies) > 1 else copies)
+
+    def stuck_ids(self, state: dict) -> list:
+        """Entità che dovrebbero ancora muoversi: non in uno stato finale o di riposo, e non "congelate" da un padre
+        in composizione (anche indiretto) concluso o inesistente: chiuso l'aggregato, le sue parti restano come sono."""
+        memo = {}
+
+        def done(eid):
+            if eid not in memo:
+                memo[eid] = False  # contro i cicli di composizione
+                s = state.get(eid, NONE)
+                memo[eid] = s == NONE or self.is_final(s) or any(done(p) for p in self.parents.get(eid, ()))
+            return memo[eid]
+
+        return [eid for eid, s in state.items()
+                if not self.is_final(s) and s not in self.resting and not any(done(p) for p in self.parents.get(eid, ()))]
 
     # ---------- utilità di naming ----------
     def sname(self, sid):
@@ -646,7 +671,7 @@ class Engine:
                                 touched.update(by_pos.get(p, ()))
                         check(nk, sorted(touched))
             # un'entità che non esiste o mai avviata non è "bloccata"
-            if moves == 0 and any(not self.is_final(s) and s not in self.resting for s in k):
+            if moves == 0 and any(not self.is_final(s) and s not in self.resting for s in k) and self.stuck_ids(self.from_key(k)):
                 if len(deadlocks) < 25:
                     deadlocks.append(k)
 
@@ -725,9 +750,8 @@ class Engine:
         resta dov'è per sempre; l'ultima azione del percorso che l'ha portato lì è quella da correggere."""
         T, q = self.t, lambda x: self.t("q", x=x)
         stuck, cause, blocked = [], None, None
-        for eid, sid in state.items():
-            if self.is_final(sid) or sid in self.resting:
-                continue
+        for eid in self.stuck_ids(state):
+            sid = state[eid]
             exits = []
             for t in self.outgoing(eid, sid):
                 reasons = []
