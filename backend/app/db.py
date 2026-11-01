@@ -75,7 +75,8 @@ CREATE TABLE IF NOT EXISTS guards (
     state_ids TEXT NOT NULL DEFAULT '[]',
     negate INTEGER NOT NULL DEFAULT 0,
     description TEXT NOT NULL DEFAULT '',
-    each_entity_id INTEGER REFERENCES entities(id) ON DELETE SET NULL
+    each_entity_id INTEGER REFERENCES entities(id) ON DELETE SET NULL,
+    alt_group INTEGER NOT NULL DEFAULT 0  -- ≠ 0: alternativa (OR) alle altre guardie dell'azione con lo stesso valore
 );
 
 -- effetto collaterale, quando scatta la transizione:
@@ -126,6 +127,47 @@ CREATE TABLE IF NOT EXISTS scenarios (
 );
 """
 
+SCHEMA += """
+-- storico: il modello (JSON di load_model) com'era prima di ogni modifica, vedi history.py
+CREATE TABLE IF NOT EXISTS snapshots (
+    id INTEGER PRIMARY KEY,
+    domain_id INTEGER NOT NULL REFERENCES domains(id) ON DELETE CASCADE,
+    label TEXT NOT NULL DEFAULT '',
+    data TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- segnalazioni dell'analisi accettate ("è voluto") o rimandate, per impronta (vedi Engine._fingerprint);
+-- context è l'impronta della parte di modello coinvolta quando sono state accettate: se cambia, vanno riviste
+CREATE TABLE IF NOT EXISTS acks (
+    id INTEGER PRIMARY KEY,
+    domain_id INTEGER NOT NULL REFERENCES domains(id) ON DELETE CASCADE,
+    fingerprint TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'accepted',  -- accepted | later
+    note TEXT NOT NULL DEFAULT '',
+    context TEXT NOT NULL DEFAULT '',
+    title TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (domain_id, fingerprint)
+);
+
+-- aspettative (test di accettazione del dominio), verificate a ogni analisi:
+-- kind=goal: la combinazione di stati rules (come le invarianti) dev'essere raggiungibile dallo stato iniziale;
+-- kind=path: la sequenza di azioni trace = [{transition_id, entity_id, action}] dev'essere possibile (expect=possible)
+--            o bloccata (expect=blocked)
+CREATE TABLE IF NOT EXISTS expectations (
+    id INTEGER PRIMARY KEY,
+    domain_id INTEGER NOT NULL REFERENCES domains(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    kind TEXT NOT NULL DEFAULT 'goal',
+    rules TEXT NOT NULL DEFAULT '[]',
+    trace TEXT NOT NULL DEFAULT '[]',
+    expect TEXT NOT NULL DEFAULT 'possible',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+"""
+
 SCHEMA_EFFECTS = SCHEMA[SCHEMA.index("CREATE TABLE IF NOT EXISTS effects"):SCHEMA.index("CREATE TABLE IF NOT EXISTS relations")]
 
 # Campi scrivibili per tabella, campi JSON e chiave padre per il CRUD generico
@@ -135,12 +177,15 @@ TABLES = {
     "attributes": {"fields": ["entity_id", "name", "type", "required", "description"], "json": []},
     "states": {"fields": ["entity_id", "name", "description", "is_initial", "is_final", "liveness", "pos"], "json": []},
     "transitions": {"fields": ["entity_id", "kind", "cascade_only", "from_state_id", "to_state_id", "action", "actor", "description"], "json": []},
-    "guards": {"fields": ["transition_id", "kind", "entity_id", "state_ids", "negate", "description", "each_entity_id"], "json": ["state_ids"]},
+    "guards": {"fields": ["transition_id", "kind", "entity_id", "state_ids", "negate", "description", "each_entity_id",
+                          "alt_group"], "json": ["state_ids"]},
     "effects": {"fields": ["transition_id", "entity_id", "kind", "to_state_id", "action", "skip_final", "description"], "json": []},
     "relations": {"fields": ["domain_id", "source_id", "target_id", "cardinality", "label", "composition", "instances"],
                   "json": []},
     "invariants": {"fields": ["domain_id", "name", "description", "severity", "rules"], "json": ["rules"]},
     "scenarios": {"fields": ["domain_id", "name", "description", "state", "history"], "json": ["state", "history"]},
+    "expectations": {"fields": ["domain_id", "name", "description", "kind", "rules", "trace", "expect"],
+                     "json": ["rules", "trace"]},
 }
 
 
@@ -202,6 +247,7 @@ MIGRATIONS = [
     ("effects", "skip_final", "ALTER TABLE effects ADD COLUMN skip_final INTEGER NOT NULL DEFAULT 0"),
     ("states", "liveness", _states_liveness),
     ("guards", "each_entity_id", "ALTER TABLE guards ADD COLUMN each_entity_id INTEGER REFERENCES entities(id) ON DELETE SET NULL"),
+    ("guards", "alt_group", "ALTER TABLE guards ADD COLUMN alt_group INTEGER NOT NULL DEFAULT 0"),
 ]
 
 

@@ -1,3 +1,16 @@
+<script>
+// mermaid.render non regge chiamate in parallelo (pagine con molti diagrammi, come la specifica): una alla volta
+let queue = Promise.resolve()
+// id unici tra tutti i diagrammi della pagina: Mermaid rimuove dal documento l'elemento con lo stesso id
+let seq = 0
+const nextId = () => `mm-${++seq}`
+function queued(fn) {
+  const run = queue.then(fn)
+  queue = run.catch(() => {})
+  return run
+}
+</script>
+
 <script setup>
 import { ref, watch, onMounted } from 'vue'
 import mermaid from 'mermaid'
@@ -12,7 +25,6 @@ const props = defineProps({ code: String, clickable: Boolean, natural: Boolean, 
 const emit = defineEmits(['entity-click'])
 const html = ref('')
 const error = ref('')
-let seq = 0
 
 mermaid.initialize({
   startOnLoad: false,
@@ -36,7 +48,7 @@ mermaid.initialize({
 async function render() {
   if (!props.code) { html.value = ''; return }
   try {
-    const { svg } = await mermaid.render(`mm-${Date.now()}-${seq++}`, props.code)
+    const { svg } = await queued(() => mermaid.render(nextId(), props.code))
     // a dimensione reale: larghezza dal viewBox, senza il max-width che Mermaid imposta
     const w = props.natural && svg.match(/viewBox="[\d.-]+ [\d.-]+ ([\d.]+)/)?.[1]
     html.value = w ? svg.replace(/width="100%"/, `width="${Math.ceil(w)}"`).replace(/max-width:\s*[\d.]+px;?/, '') : svg

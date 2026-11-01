@@ -13,6 +13,224 @@
     "or": "o",
     "close": "Chiudi"
   },
+  "history": {
+    "title": "Storico delle modifiche",
+    "subtitle": "Ogni modifica al modello lascia una versione: puoi vedere cosa è cambiato, confrontarla con oggi e tornarci.",
+    "undo": "Annulla",
+    "undoHint": "Annulla l'ultima modifica al modello (Ctrl+Z fuori dai campi di testo)",
+    "undone": "Annullato: {label}",
+    "nothingToUndo": "Niente da annullare",
+    "empty": "Ancora nessuna modifica registrata: lo storico parte dalla prossima.",
+    "latest": "ultima",
+    "compare": "Confronta con oggi",
+    "hideCompare": "Chiudi confronto",
+    "restore": "Ripristina",
+    "confirmRestore": "Ripristinare il modello com'era prima della modifica del {when}? Anche il ripristino si può annullare.",
+    "restored": "Versione ripristinata",
+    "more": "altre {n}…",
+    "noVisibleChange": "Nessuna differenza visibile nel modello.",
+    "sinceThen": "Una differenza tra questa versione e oggi | {n} differenze tra questa versione e oggi"
+  },
+  "guide": {
+    "eyebrow": "Guida",
+    "title": "Concetti del modello",
+    "subtitle": "Cosa significa ogni elemento del modello e come lo usa l'analisi, con un esempio per ciascuno.",
+    "open": "Apri la voce nella Guida",
+    "groups": {
+      "model": "Il modello",
+      "rules": "Regole tra entità",
+      "analysis": "Analisi e manutenzione"
+    },
+    "entity": {
+      "title": "Entità",
+      "body": "Un oggetto del dominio con un ciclo di vita: un aggregato, un'entità o un value object. Si raggruppano per bounded context, che nella mappa diventano riquadri.",
+      "example": "Ordine, Pagamento e Spedizione sono tre entità; Ordine sta nel contesto Vendite, Pagamento in Pagamenti."
+    },
+    "states": {
+      "title": "Stati, iniziale e finale",
+      "body": "Gli stati in cui l'entità può trovarsi. L'iniziale è dove parte se non ha azioni di creazione; i finali chiudono il ciclo: non hanno azioni in uscita e un effetto «ignora se già finale» li salta.",
+      "example": "Ordine: BOZZA (iniziale) → CONFERMATO → PAGATO → CHIUSO (finale)."
+    },
+    "liveness": {
+      "title": "Vita degli stati: attivo, spento, eliminato",
+      "body": "Per ogni stato si dice se l'entità opera (attivo), esiste ma è disattivata e si può riaccendere (spento), oppure non c'è più e non si torna indietro (eliminato). NON_ESISTE conta come eliminato. Le composizioni usano questa informazione.",
+      "example": "Cliente SOSPESO è spento (si riattiva); Cliente CANCELLATO è eliminato."
+    },
+    "creation": {
+      "title": "Azioni di creazione",
+      "body": "Un'entità può nascere in più modi, ognuno con i suoi controlli: un'azione di creazione parte da NON_ESISTE e porta in uno stato di nascita. Senza azioni di creazione l'entità parte dallo stato iniziale.",
+      "example": "Ordine: «Ordine dal sito» oppure «Ordine da marketplace», con guardie diverse."
+    },
+    "actions": {
+      "title": "Azioni (transizioni)",
+      "body": "Portano l'entità da uno stato a un altro. Possono avere un attore, guardie (condizioni sulle altre entità) ed effetti a cascata (cosa succede alle altre entità).",
+      "example": "Ordine «evadi» PAGATO → IN_SPEDIZIONE, eseguita dal Magazzino."
+    },
+    "cascade": {
+      "title": "Solo in cascata",
+      "body": "Un'azione che l'utente non esegue direttamente: avviene solo come effetto di un'altra. L'analisi segnala quelle che nessuno innesca.",
+      "example": "Fattura «emetti nota di credito» avviene solo quando si registra il reso dell'Ordine."
+    },
+    "guards": {
+      "title": "Guardie",
+      "body": "Condizioni sugli stati di altre entità che devono essere vere perché l'azione sia eseguibile. Durante una cascata vedono gli stati già aggiornati dalle azioni precedenti. Le regole testuali sono promemoria da verificare a mano.",
+      "example": "«registra incasso» richiede che il Pagamento sia CATTURATO."
+    },
+    "guardsOr": {
+      "title": "Guardie in OPPURE",
+      "body": "Di norma le guardie valgono tutte insieme (E). Legandole con OPPURE ne basta una del gruppo.",
+      "example": "«spedisci» richiede Pagamento CATTURATO oppure Cliente con fido approvato."
+    },
+    "guardsEach": {
+      "title": "Guardie «per ogni»",
+      "body": "Su un'entità figlia in una composizione, la guardia può valere per ogni padre esistente: ogni padre deve avere almeno un figlio negli stati indicati (con «non deve essere in»: nessuno).",
+      "example": "Confermare il Carrello richiede, per ogni Ordine, almeno una Riga d'ordine DISPONIBILE."
+    },
+    "effects": {
+      "title": "Effetti a cascata",
+      "body": "Cosa fa un'azione alle altre entità: le porta in uno stato, fa eseguire loro un'azione per nome, oppure le fa nascere. Ogni effetto deve trovare sull'entità figlia una transizione che esista e le cui guardie passino: se non la trova, è una cascata bloccata.",
+      "example": "Ordine «annulla» → Pagamento in ANNULLATO (serve una transizione del Pagamento verso ANNULLATO)."
+    },
+    "skipFinal": {
+      "title": "Ignora se già finale",
+      "body": "Su un effetto: se l'entità coinvolta è già in uno stato finale, la si lascia com'è invece di segnalare un conflitto. Utile quando l'effetto tocca tutte le istanze e alcune sono già concluse.",
+      "example": "Annullare l'ordine annulla le sue righe, tranne quelle già SPEDITE."
+    },
+    "composition": {
+      "title": "Composizione",
+      "body": "Una relazione in cui il figlio non esiste senza il padre: quando il padre viene eliminato il figlio deve sparire, quando si spegne il figlio non può restare attivo. Ne nascono invarianti e controlli automatici.",
+      "example": "Riga d'ordine è composta in Ordine: eliminato l'ordine, le sue righe devono essere eliminate."
+    },
+    "instances": {
+      "title": "Istanze multiple",
+      "body": "Su una composizione si può chiedere all'analisi di simulare 2-3 figli per padre (#1, #2), per trovare casi come «un figlio confermato e l'altro eliminato». Ogni copia del padre ha le sue copie dei figli. Il simulatore resta a un'istanza.",
+      "example": "Ordine con 2 Righe: l'analisi esplora anche Riga #1 SPEDITA e Riga #2 ANNULLATA."
+    },
+    "invariants": {
+      "title": "Invarianti",
+      "body": "Combinazioni di stati che non devono mai esistere insieme. L'analisi cerca un percorso che ci arrivi e, se lo trova, mostra il più breve.",
+      "example": "Vietato: Ordine ANNULLATO e Spedizione SPEDITA."
+    },
+    "analysis": {
+      "title": "Analisi degli edge case",
+      "body": "Esplora tutte le combinazioni di stati raggiungibili dallo stato iniziale e segnala invarianti violabili, cascate bloccate, transizioni mancanti, deadlock, stati mai raggiunti e azioni mai eseguibili. La vista «per causa» raggruppa i sintomi della stessa causa.",
+      "example": "12 segnalazioni da 4 cause: correggendo una causa spariscono tutti i suoi sintomi."
+    },
+    "missing": {
+      "title": "Transizioni mancanti",
+      "body": "Un effetto a cascata chiede a un'entità di passare da uno stato a un altro, ma quella transizione non esiste. Si aggiunge (di solito «solo in cascata»), oppure si rivede l'effetto.",
+      "example": "Annullare l'ordine chiede al Pagamento FALLITO → ANNULLATO, che non c'è."
+    },
+    "conflicts": {
+      "title": "Cascate bloccate",
+      "body": "Un'azione non riesce a completare i suoi effetti: manca una transizione, una guardia blocca, gli effetti si richiamano all'infinito o non si sa quale azione scegliere. Ogni caso ha un suggerimento su dove intervenire.",
+      "example": "«registra reso» dell'Ordine è bloccata perché la nota di credito richiede la Fattura EMESSA e la trova STORNATA."
+    },
+    "deadlock": {
+      "title": "Deadlock",
+      "body": "Una combinazione in cui nessuna azione è eseguibile e qualche entità non è conclusa. Spesso è la conseguenza di altre cause: si riproduce il percorso nel simulatore per vedere quale guardia ferma le azioni.",
+      "example": "Spedizione SMARRITA senza nessuna azione in uscita."
+    },
+    "fix": {
+      "title": "Risolvi e anteprima",
+      "body": "Per molte segnalazioni il sistema propone soluzioni applicabili con un clic. «Anteprima» rilancia l'analisi sul modello modificato senza toccarlo e dice quanti errori risolve o introduce.",
+      "example": "«Aggiungi a Pagamento la transizione da FALLITO a ANNULLATO»: risolve 2 errori."
+    },
+    "ack": {
+      "title": "Accettare o rimandare",
+      "body": "Se una segnalazione è voluta, la si accetta con una nota; se ci si pensa dopo, la si rimanda. Esce dai conteggi finché la parte di modello coinvolta non cambia: allora torna «da rivedere».",
+      "example": "«Il rimborso senza fattura è gestito dal back office»: accettata."
+    },
+    "expectations": {
+      "title": "Aspettative",
+      "body": "Test di accettazione del dominio: obiettivi che devono restare raggiungibili e percorsi (salvati dal simulatore) che devono funzionare o restare bloccati. Si verificano a ogni analisi.",
+      "example": "Obiettivo: dev'essere possibile arrivare a Ordine CONSEGNATO con Pagamento CATTURATO."
+    },
+    "history": {
+      "title": "Storico e Annulla",
+      "body": "Ogni modifica al modello lascia una versione. Annulla (Ctrl+Z fuori dai campi di testo) torna indietro di un passo; dallo Storico si confronta una versione con oggi e la si ripristina.",
+      "example": "Una soluzione applicata per sbaglio si annulla con Ctrl+Z."
+    }
+  },
+  "spec": {
+    "eyebrow": "Specifica funzionale",
+    "hint": "Il documento del dominio, sempre aggiornato con il modello. Per un PDF: Stampa → Salva come PDF.",
+    "print": "Stampa / PDF",
+    "counts": "{entities} entità, {invariants} invarianti",
+    "contents": "Indice",
+    "map": "Mappa dei contesti",
+    "state": "Stato",
+    "kind": "Tipo",
+    "actions": "Azioni",
+    "from": "Da",
+    "action": "Azione",
+    "to": "A",
+    "cascadeOnly": "solo in cascata",
+    "none": "Nessuna.",
+    "open": "Punti aperti",
+    "openHint": "Le cause ancora aperte trovate dall'analisi degli edge case (escluse quelle accettate).",
+    "noOpen": "Nessun punto aperto."
+  },
+  "exp": {
+    "eyebrow": "Test di accettazione",
+    "title": "Aspettative",
+    "subtitle": "Cosa il dominio deve permettere: obiettivi che devono restare raggiungibili e percorsi che devono funzionare. Si verificano a ogni analisi: se una modifica li rompe, lo vedi subito.",
+    "addGoal": "Obiettivo",
+    "check": "Verifica",
+    "checking": "Verifico le aspettative…",
+    "empty": "Nessuna aspettativa. Aggiungi un obiettivo («deve essere possibile arrivare a Ordine CONSEGNATO») oppure, dal simulatore, salva come test una sequenza di azioni che deve continuare a funzionare.",
+    "summary": "aspettative rispettate",
+    "goal": "Obiettivo",
+    "path": {
+      "possible": "Percorso che deve funzionare",
+      "blocked": "Percorso che deve restare bloccato"
+    },
+    "reach": "Deve essere possibile arrivare a",
+    "reachedIn": "Raggiungibile con un'azione: | Raggiungibile in {n} azioni:",
+    "unreachable": "Non raggiungibile: dallo stato iniziale non si arriva mai a questa combinazione.",
+    "noConditions": "Nessuna condizione: aggiungine almeno una.",
+    "pathOk": "Funziona: tutte le azioni si eseguono.",
+    "pathBlockedOk": "Si blocca al passo {n} («{action}»), come previsto.",
+    "pathFails": "Si blocca al passo {n} («{action}»):",
+    "pathShouldBlock": "Doveva bloccarsi, ma si esegue tutto.",
+    "pathHint": "I percorsi si creano dal simulatore: esegui le azioni e premi «Salva come test» nello storico.",
+    "edit": "Modifica aspettativa",
+    "new": "Nuovo obiettivo",
+    "namePlaceholder": "es. Un ordine pagato si può consegnare",
+    "expect": "Esito atteso",
+    "conditions": "Combinazione da raggiungere",
+    "conditionsHint": "(tutte vere nello stesso momento)",
+    "saved": "Aspettativa salvata",
+    "saveTest": "Salva come test",
+    "saveTestHint": "Salva la sequenza di azioni come aspettativa: dovrà continuare a funzionare dopo ogni modifica",
+    "saveTestDisabled": "Solo sequenze di azioni eseguite dallo stato iniziale, senza stati impostati a mano o forzature",
+    "testName": "Nome del test",
+    "testSaved": "Test salvato tra le aspettative"
+  },
+  "ack": {
+    "title": "Oppure non è un errore?",
+    "notePlaceholder": "Perché va bene così (opzionale)",
+    "accept": "È voluto: accetta",
+    "later": "Ci penso più avanti",
+    "reopen": "Riapri",
+    "current": {
+      "accepted": "Accettata: non conta più tra le segnalazioni aperte.",
+      "later": "Rimandata: non conta più tra le segnalazioni aperte."
+    },
+    "staleHint": "Era stata accettata, ma da allora la parte di modello coinvolta è cambiata: va rivista.",
+    "done": {
+      "accepted": "Segnalazione accettata",
+      "later": "Segnalazione rimandata"
+    },
+    "reopened": "Segnalazione riaperta",
+    "badge": {
+      "accepted": "accettata",
+      "later": "rimandata",
+      "stale": "da rivedere"
+    },
+    "show": "Accettate e rimandate ({n})",
+    "hide": "Nascondi accettate e rimandate"
+  },
   "fix": {
     "button": "Risolvi",
     "title": "Risolvi",
@@ -20,13 +238,24 @@
     "suggested": "consigliata",
     "apply": "Applica",
     "applied": "Soluzione applicata: analisi aggiornata",
-    "undoHint": "La modifica si applica subito al modello; puoi sempre rivederla nella scheda dell'entità.",
+    "undoHint": "La modifica si applica subito al modello; si annulla con Annulla (Ctrl+Z) o dallo Storico.",
+    "preview": {
+      "button": "Anteprima",
+      "loading": "Rilancio l'analisi sul modello modificato…",
+      "solves": "Risolve {what}",
+      "solvesNothing": "Non risolve nulla da solo",
+      "introduces": "introduce {what}",
+      "errors": "un errore | {n} errori",
+      "warnings": "un avviso | {n} avvisi",
+      "and": " e "
+    },
     "manual": {
       "default": "Per questo caso non c'è una correzione automatica sicura: apri l'entità e rivedi le azioni coinvolte.",
       "deadlock": "Nessuna azione è eseguibile in questa combinazione di stati. Riproduci il percorso nel simulatore: le azioni bloccate mostrano quale guardia le ferma.",
       "dead_actions": "L'azione non è mai eseguibile senza conflitti: controlla le sue guardie, e se è solo in cascata che qualcuno la inneschi.",
       "reachability": "Lo stato non viene mai raggiunto: nessuna azione ci arriva, oppure le guardie di quelle che ci arrivano non sono mai soddisfatte.",
-      "relations": "È un'indicazione sul disegno delle relazioni: dichiarale (o toglile) dalla scheda dell'entità."
+      "relations": "È un'indicazione sul disegno delle relazioni: dichiarale (o toglile) dalla scheda dell'entità.",
+      "expectations": "Un'aspettativa del dominio non è più rispettata. Apri le Aspettative: per un percorso vedi dove si blocca e perché, per un obiettivo controlla le azioni che dovrebbero portarci."
     }
   },
   "nav": {
@@ -37,6 +266,10 @@
     "invariants": "Invarianti",
     "simulator": "Simulatore",
     "analysis": "Analisi edge case",
+    "history": "Storico",
+    "expectations": "Aspettative",
+    "spec": "Specifica",
+    "guide": "Guida",
     "entities": "Entità",
     "newEntity": "Nuova entità",
     "specMd": "Specifica .md",
@@ -253,6 +486,7 @@
       "guards": "guardie",
       "invariants": "invarianti",
       "effect_conflict": "cascata bloccata",
+      "expectations": "aspettative",
       "missing_transition": "transizioni mancanti",
       "deadlock": "deadlock",
       "dead_actions": "azioni morte",
@@ -261,6 +495,12 @@
       "liveness": "vita degli stati"
     },
     "noIssues": "Nessun problema trovato con questi filtri.",
+    "view": {
+      "causes": "Per causa",
+      "list": "Elenco",
+      "summary": "{issues} segnalazioni da {causes} cause",
+      "showIssues": "Vedi la segnalazione | Vedi le {n} segnalazioni"
+    },
     "openEntity": "Apri entità",
     "shortestPath": "Percorso minimo ({n} passo) | Percorso minimo ({n} passi)",
     "replay": "Riproduci",
@@ -322,7 +562,7 @@
     "cascadeOnly": "Solo in cascata",
     "cascadeOnlyTag": "solo in cascata",
     "cascadeOnlyHint": "Non si esegue direttamente: avviene solo come effetto di un'altra azione",
-    "cascadeOnlyLong": "Non si esegue direttamente: avviene solo come effetto di un'altra azione (es. la fase di gara nasce solo creando la procedura).",
+    "cascadeOnlyLong": "Non si esegue direttamente: avviene solo come effetto di un'altra azione (es. la nota di credito si emette solo registrando il reso dell'ordine).",
     "matrix": "Tabella stati × azioni",
     "matrixHint": "Le celle vuote sono le combinazioni non gestite: verifica che sia voluto.",
     "matrixCorner": "stato \\ azione",
@@ -358,6 +598,8 @@
     "onState": "su stato",
     "rule": "regola",
     "mustBeIn": "deve essere in",
+    "and": "E",
+    "or": "OPPURE",
     "mustNotBeIn": "non deve essere in",
     "eachNone": "{entity}: tutte le istanze esistenti",
     "eachOption": "per ogni {parent}",

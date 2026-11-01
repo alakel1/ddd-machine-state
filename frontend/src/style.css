@@ -5,9 +5,11 @@
   --font-mono: "JetBrains Mono Variable", ui-monospace, monospace;
 }
 
+@page { margin: 16mm 14mm; }
+
 @layer base {
   html { -webkit-font-smoothing: antialiased; font-feature-settings: "cv11", "ss01"; }
-  body { @apply text-zinc-800 bg-zinc-50; }
+  body { @apply text-zinc-800 bg-zinc-50 print:bg-white; }
   ::selection { @apply bg-indigo-200; }
 }
 

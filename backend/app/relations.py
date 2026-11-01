@@ -114,9 +114,9 @@ def expand(model: dict, tr=None) -> tuple[dict, dict]:
     Semantica dei riferimenti verso un'entità duplicata:
       - da una sua copia o da un'altra entità duplicata: si accoppia per indice (copia i ↔ copia i);
       - da un'entità singola: guardie su "tutte le istanze esistenti", effetti su tutte le istanze;
-      - invarianti: una condizione di presenza ("lotto vivo") vale se vale per almeno un'istanza
+      - invarianti: una condizione di presenza ("riga viva") vale se vale per almeno un'istanza
         (si espande istanza per istanza), una condizione di assenza (insieme che include NON_ESISTE)
-        vale solo se vale per tutte ("nessun lotto c'è").
+        vale solo se vale per tutte ("nessuna riga c'è").
     """
     tr = tr or translator()
     counts = {}
@@ -248,7 +248,7 @@ def relation_issues(model: dict, sname, t=None) -> list[dict]:
                 t("r.always_exists.detail", child=C, parent=P), entity_id=child["id"], relation_id=r["id"],
                 code="r.always_exists")
         for c in creations:
-            ok = any(requires_parent(g, parent["id"]) for g in c["guards"])
+            ok = any(requires_parent(g, parent["id"]) for g in c["guards"] if not g.get("alt_group"))
             if not ok and c.get("cascade_only"):
                 # nasce solo in cascata: va bene se a innescarla sono soltanto azioni del padre
                 srcs = [x for e in model["entities"] for x in e["transitions"]

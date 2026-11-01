@@ -99,7 +99,7 @@ export async function svgToPng(svg, { scale = 2, background = '#ffffff' } = {}) 
   return new Promise((resolve, reject) => canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('toBlob'))), 'image/png'))
 }
 
-/** Nome di file sicuro: "Fase di gara · stati" → "fase-di-gara-stati". */
+/** Nome di file sicuro: "Riga d'ordine · stati" → "riga-d-ordine-stati". */
 export const fileName = (name) =>
   (name || 'diagram').normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-zA-Z0-9]+/g, '-').replace(/^-|-$/g, '').toLowerCase()
 

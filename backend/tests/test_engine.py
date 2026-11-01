@@ -1,0 +1,133 @@
+"""Motore: cascate, guardie, istanze multiple, aspettative, impronte delle segnalazioni."""
+from app.engine import NONE, Engine
+from app.i18n import MESSAGES
+from app.relations import expand
+
+
+def test_cascade_needs_a_transition_on_the_child(model):
+    model.entity("Order", ["OPEN", "CANCELLED"], initial="OPEN", final=["CANCELLED"])
+    model.entity("Payment", ["NEW", "PAID", "VOID"], initial="NEW", final=["VOID"])
+    model.transition("Payment", "NEW", "PAID", "pay")
+    cancel = model.transition("Order", "OPEN", "CANCELLED", "cancel",
+                              effects=[{"entity_id": model.eid("Payment"), "to_state_id": model.s("Payment", "VOID")}])
+    eng = Engine(model.m, "en")
+    r = eng.apply(eng.initial_state(), cancel)
+    assert not r["ok"]  # Payment non ha nessuna transizione verso VOID
+
+    issues = eng.analyze()["issues"]
+    missing = [i for i in issues if i["category"] == "missing_transition"]
+    assert {(i["gap"]["from"], i["gap"]["to"]) for i in missing} == {
+        (model.s("Payment", "NEW"), model.s("Payment", "VOID")), (model.s("Payment", "PAID"), model.s("Payment", "VOID"))}
+    assert all(i["fixes"] and i["fixes"][0]["ops"][0]["op"] == "add_transition" for i in missing)
+
+
+def test_skip_final_leaves_concluded_children_alone(model):
+    model.entity("Order", ["OPEN", "CLOSED"], initial="OPEN", final=["CLOSED"])
+    model.entity("Item", ["ACTIVE", "DONE"], initial="ACTIVE", final=["DONE"])
+    model.transition("Item", "ACTIVE", "DONE", "finish")
+    close = model.transition("Order", "OPEN", "CLOSED", "close",
+                             effects=[{"entity_id": model.eid("Item"), "to_state_id": model.s("Item", "DONE")}])
+    eng = Engine(model.m, "en")
+    st = {**eng.initial_state(), model.eid("Item"): model.s("Item", "DONE")}
+    assert eng.apply(st, close)["ok"]  # già nello stato di arrivo: niente da fare
+
+
+def test_guards_see_the_state_updated_by_the_cascade(model):
+    model.entity("Order", ["OPEN", "CONFIRMED"], initial="OPEN")
+    model.entity("Line", ["DRAFT", "CONFIRMED"], initial="DRAFT")
+    model.transition("Line", "DRAFT", "CONFIRMED", "confirm", cascade_only=True,
+                     guards=[{"entity_id": model.eid("Order"), "state_ids": [model.s("Order", "OPEN")]}])
+    confirm = model.transition("Order", "OPEN", "CONFIRMED", "confirm",
+                               effects=[{"entity_id": model.eid("Line"), "to_state_id": model.s("Line", "CONFIRMED")}])
+    eng = Engine(model.m, "en")
+    conflict = next(i for i in eng.analyze()["issues"] if i["category"] == "effect_conflict")
+    assert conflict["conflict"]["misses"]  # la guardia della riga vede l'ordine già CONFIRMED
+    assert any(f["key"] == "widen_guard" for f in conflict["fixes"])
+    assert eng.apply(eng.initial_state(), confirm)["ok"] is False
+
+
+def _checkout_model(model):
+    """Carrello → Ordine → Riga: confermare il carrello richiede che ogni ordine abbia una riga."""
+    model.entity("Cart", ["OPEN", "CHECKED_OUT"], initial="OPEN", final=["CHECKED_OUT"])
+    model.entity("Order", ["DRAFT"])
+    model.entity("Line", ["DRAFT"])
+    model.transition("Order", None, "DRAFT", "create", create=True)
+    model.transition("Line", None, "DRAFT", "create", create=True,
+                     guards=[{"entity_id": model.eid("Order"), "state_ids": [model.s("Order", "DRAFT")]}])
+    checkout = model.transition("Cart", "OPEN", "CHECKED_OUT", "checkout",
+                                guards=[{"entity_id": model.eid("Line"), "state_ids": [model.s("Line", "DRAFT")],
+                                         "each_entity_id": model.eid("Order")}])
+    model.relation("Cart", "Order", instances=2)
+    model.relation("Order", "Line", instances=1)
+    return checkout
+
+
+def test_for_each_guard_single_instance(model):
+    checkout = _checkout_model(model)
+    eng = Engine(model.m, "en")
+    t = eng.transition[checkout]
+    st = eng.initial_state()
+    assert eng.guard_failures(t, st) == []  # nessun ordine: niente da controllare
+    st[model.eid("Order")] = model.s("Order", "DRAFT")
+    assert eng.guard_failures(t, st)  # un ordine senza righe
+    st[model.eid("Line")] = model.s("Line", "DRAFT")
+    assert eng.guard_failures(t, st) == []
+
+
+def test_children_of_duplicated_parents_are_duplicated_too(model):
+    _checkout_model(model)
+    _, labels = expand(model.m)
+    copies = {}
+    for v in labels.values():
+        copies[v["base"]] = copies.get(v["base"], 0) + 1
+    # Line ha instances=1, ma il padre Order ne ha 2: ogni ordine ha la sua riga
+    assert copies == {model.eid("Order"): 2, model.eid("Line"): 2}
+
+
+def test_alternative_guards(model):
+    model.entity("Order", ["OPEN", "PAID", "SHIPPED"], initial="OPEN")
+    model.entity("Payment", ["NEW", "CAPTURED"], initial="NEW")
+    model.entity("Credit", ["NO", "YES"], initial="NO")
+    order, payment = model.eid("Order"), model.eid("Payment")
+    ship = model.transition("Order", "OPEN", "SHIPPED", "ship", guards=[
+        {"entity_id": payment, "state_ids": [model.s("Payment", "CAPTURED")], "alt_group": 1},
+        {"entity_id": model.eid("Credit"), "state_ids": [model.s("Credit", "YES")], "alt_group": 1},
+        {"entity_id": order, "state_ids": [model.s("Order", "OPEN")]},
+    ])
+    eng = Engine(model.m, "en")
+    t = eng.transition[ship]
+    st = eng.initial_state()
+    assert not eng.guards_ok(t, st) and len(eng.guard_failures(t, st)) == 1  # una sola clausola, con le due alternative
+    assert len(eng.guard_misses(t, st)) == 2
+    for alternative in ({payment: model.s("Payment", "CAPTURED")}, {model.eid("Credit"): model.s("Credit", "YES")}):
+        assert eng.guards_ok(t, {**st, **alternative}) and eng.guard_failures(t, {**st, **alternative}) == []
+
+
+def test_expectations(model):
+    model.entity("Order", ["OPEN", "PAID", "SHIPPED"], initial="OPEN")
+    pay = model.transition("Order", "OPEN", "PAID", "pay")
+    ship = model.transition("Order", "PAID", "SHIPPED", "ship")
+    eng = Engine(model.m, "en")
+    oid = model.eid("Order")
+    goal = eng.check_expectation({"kind": "goal", "rules": [{"entity_id": oid, "state_ids": [model.s("Order", "SHIPPED")]}]})
+    assert goal["ok"] and [s["action"] for s in goal["trace"]] == ["pay", "ship"]
+    step = lambda t: {"transition_id": t, "entity_id": oid}
+    assert eng.check_expectation({"kind": "path", "expect": "possible", "trace": [step(pay), step(ship)]})["ok"]
+    blocked = eng.check_expectation({"kind": "path", "expect": "possible", "trace": [step(ship)]})
+    assert not blocked["ok"] and blocked["done"] == 0
+    assert eng.check_expectation({"kind": "path", "expect": "blocked", "trace": [step(ship)]})["ok"]
+
+
+def test_fingerprints_do_not_depend_on_language(model):
+    test_cascade_needs_a_transition_on_the_child(model)
+    it, en = (sorted(i["fingerprint"] for i in Engine(model.m, lang).analyze()["issues"]) for lang in ("it", "en"))
+    assert it == en
+
+
+def test_backend_messages_exist_in_every_language():
+    keys = {lang: set(msgs) for lang, msgs in MESSAGES.items()}
+    assert keys["it"] == keys["en"], keys["it"] ^ keys["en"]
+
+
+def test_none_state_is_zero():
+    assert NONE == 0

@@ -1,7 +1,7 @@
 <script setup>
-import { computed, watch } from 'vue'
+import { computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { store, loadDomains, loadModel, createEntity, toast } from './store'
+import { store, loadDomains, loadModel, createEntity, toast, undo } from './store'
 import { pal } from './colors'
 import { t, locale, setLocale, LOCALES } from './i18n'
 
@@ -22,7 +22,20 @@ const nav = computed(() => [
   { to: 'invariants', label: t('nav.invariants'), icon: 'shield-halved', count: store.model?.invariants.length },
   { to: 'simulator', label: t('nav.simulator'), icon: 'play' },
   { to: 'analysis', label: t('nav.analysis'), icon: 'magnifying-glass-chart' },
+  { to: 'expectations', label: t('nav.expectations'), icon: 'bullseye' },
+  { to: 'history', label: t('nav.history'), icon: 'clock-rotate-left' },
+  { to: 'spec', label: t('nav.spec'), icon: 'book' },
 ])
+
+// Ctrl/⌘+Z annulla l'ultima modifica al modello, tranne mentre si scrive in un campo (lì annulla il testo)
+function onKey(ev) {
+  if (!domainId.value || !(ev.ctrlKey || ev.metaKey) || ev.shiftKey || ev.key.toLowerCase() !== 'z') return
+  if (ev.target.closest('input, textarea, select, [contenteditable]')) return
+  ev.preventDefault()
+  undo(domainId.value)
+}
+onMounted(() => window.addEventListener('keydown', onKey))
+onUnmounted(() => window.removeEventListener('keydown', onKey))
 
 // entità raggruppate per bounded context, nell'ordine in cui compaiono
 const entityGroups = computed(() => {
@@ -41,7 +54,7 @@ async function addEntity() {
 <template>
   <div class="flex min-h-screen">
     <!-- Sidebar -->
-    <aside class="w-64 shrink-0 bg-zinc-950 text-zinc-300 flex flex-col sticky top-0 h-screen">
+    <aside class="w-64 shrink-0 bg-zinc-950 text-zinc-300 flex flex-col sticky top-0 h-screen print:hidden">
       <RouterLink to="/" class="flex items-center gap-2.5 px-5 h-16 border-b border-white/5">
         <div class="size-8 rounded-lg bg-gradient-to-br from-indigo-500 to-violet-600 grid place-items-center shadow-lg shadow-indigo-900/50">
           <i class="fa-solid fa-cubes fa-fw text-[16px] text-white" />
@@ -114,6 +127,11 @@ async function addEntity() {
       </nav>
 
       <div class="p-3 border-t border-white/5 space-y-2">
+        <button v-if="domainId" @click="undo(domainId)" :title="$t('history.undoHint')"
+                class="w-full flex items-center justify-center gap-1.5 rounded-lg py-2 text-xs bg-white/5 hover:bg-white/10 hover:text-white transition cursor-pointer">
+          <i class="fa-solid fa-rotate-left fa-fw text-[12px]" /> {{ $t('history.undo') }}
+          <kbd class="ml-1 text-[10px] text-zinc-500 font-sans">Ctrl+Z</kbd>
+        </button>
         <div v-if="domainId" class="grid grid-cols-2 gap-2">
           <a :href="`/api/domains/${domainId}/export`" :download="$t('nav.jsonFile', { id: domainId })"
              class="flex items-center justify-center gap-1.5 rounded-lg py-2 text-xs bg-white/5 hover:bg-white/10 hover:text-white transition">
@@ -124,6 +142,11 @@ async function addEntity() {
             <i class="fa-solid fa-file-lines fa-fw text-[12px]" /> {{ $t('nav.specMd') }}
           </a>
         </div>
+        <RouterLink :to="domainId ? `/d/${domainId}/guide` : '/guide'"
+                    class="flex items-center justify-center gap-1.5 rounded-lg py-2 text-xs bg-white/5 hover:bg-white/10 hover:text-white transition"
+                    active-class="!bg-white/10 !text-white">
+          <i class="fa-solid fa-circle-question fa-fw text-[12px]" /> {{ $t('nav.guide') }}
+        </RouterLink>
         <div class="flex items-center gap-2 px-1">
           <i class="fa-solid fa-language fa-fw text-[14px] text-zinc-500" :title="$t('nav.language')" />
           <div class="flex-1 grid grid-cols-2 gap-1 rounded-lg bg-white/5 p-0.5">

@@ -18,7 +18,7 @@ A context map of your entities grouped by bounded context, with declared relatio
 ### Entity editor
 Define states (initial, final; active, off or deleted), creation actions, transitions with guards and cascading effects, and the entity's relations with what each composition implies. A live state diagram, a *states × actions* table that exposes unhandled combinations, and a list of everyone who depends on the entity.
 
-The errors the analysis finds on the entity are shown right on top, each with what to fix and where: transitions that other entities' cascades need and the entity lacks can be added in one click.
+The errors the analysis finds on the entity are shown right on top, each with what to fix and a **Fix** button: transitions that other entities' cascades need and the entity lacks can be added in one click.
 
 ![Entity editor](docs/screenshots/entity.png)
 
@@ -42,8 +42,27 @@ A breadth-first model checker over the global state space (up to 1,000,000 combi
 
 Every finding comes with the **shortest path** that reproduces it, which you can replay in the simulator. A co-existence matrix shows which state pairs of two entities are reachable together.
 
-### Export
-JSON (round-trip import) and a functional specification in Markdown, analysis included.
+Findings are grouped **by cause**, so fixing one cause clears all its symptoms. Each one has a **Fix** button with concrete fixes derived from the model (add the missing transition, skip concluded children, widen a guard, add the effect a composition needs…): **preview** what a fix would solve or introduce, then apply it in one click. Findings that are intended can be **accepted** (or postponed) with a note; they come back if the part of the model involved changes. The exploration runs in the background as soon as the model changes, so results are usually ready when you open them.
+
+![Fix with preview](docs/screenshots/fix.png)
+
+### Expectations
+Acceptance tests for the domain: **goals** that must stay reachable ("it must be possible to reach Order DELIVERED with Payment CAPTURED") and **paths** saved from the simulator that must keep working, or stay blocked. They are checked at every analysis, so a change that breaks one shows up right away.
+
+![Expectations](docs/screenshots/expectations.png)
+
+### History and undo
+Every change to the model leaves a version: **undo** with one click (or Ctrl+Z), see what each change did, compare any version with today and restore it.
+
+### Specification and export
+An always up-to-date **functional specification** page (context map, every entity with states, diagram, actions, guards and effects, invariants, expectations and open points), ready to print or save as PDF. Also JSON (round-trip import) and Markdown.
+
+![Functional specification](docs/screenshots/spec.png)
+
+### Guide
+A built-in guide explains every concept of the model with an example; the "?" next to the trickier settings in the editor open the right entry.
+
+![Guide](docs/screenshots/guide.png)
 
 ## Concepts
 
@@ -53,7 +72,7 @@ JSON (round-trip import) and a functional specification in Markdown, analysis in
 | **State** | One initial state, zero or more final states. Each state also says whether the entity is **active** (exists and operates), **off** (disabled but recoverable, e.g. DISABLED) or **deleted** (gone for good, e.g. DELETED) |
 | **Creation action** | A way the entity comes into existence: from `DOES_NOT_EXIST` to a state, with its own guards, effects and actor. An entity can have several |
 | **Action** | A transition `from → to` (from "any" = from every non-final state), with an actor |
-| **State guard** | Precondition: another entity must (or must not) be in given states |
+| **State guard** | Precondition: another entity must (or must not) be in given states. Guards can be alternatives (OR), and on a composition child they can apply **for each** parent ("every order has at least one available line") |
 | **Rule** | Free-text business condition, shown as "to be verified" |
 | **Cascading effect** | The action forces another entity to change state, run an action or be created. If no valid transition exists, it's a **conflict** |
 | **Invariant** | A forbidden combination of states (AND of conditions); may use `DOES_NOT_EXIST` |
@@ -84,6 +103,14 @@ For hot reload, run `uvicorn app.main:app --reload` in `backend/` and `npm run d
 
 The database is `backend/ddd.sqlite3` (override with `DDD_DB`). On first start an example domain is seeded.
 
+### Tests
+
+```bash
+docker compose exec backend sh -c "pip install -q -r requirements-dev.txt && python -m pytest -q tests"
+```
+
+CI (GitHub Actions) runs the backend tests and the frontend build on every push and pull request.
+
 ## Tech stack
 
 | Layer | Stack |
@@ -96,14 +123,18 @@ The database is `backend/ddd.sqlite3` (override with `DDD_DB`). On first start a
 backend/app/
   engine.py        state machine, cascade propagation, exploration, analysis
   relations.py     compositions, multiple instances, relation checks
+  fixes.py         fixes proposed for each finding ("Fix")
+  history.py       model snapshots: undo, restore, compare
+  editing.py       multi-row edits and fix operations
   i18n.py          server-side messages (analysis, conflicts, export) in en/it
   db.py            schema, migrations, generic CRUD
   main.py          REST API
   portability.py   JSON import / Markdown export
   seed.py          example domain
+backend/tests/     engine and API tests (pytest)
 frontend/src/
-  views/           Home, Model, Entity, Invariants, Simulator, Analysis
-  components/      Mermaid, StateChip, StatePicker, Trace, Modal, PageHeader
+  views/           Home, Model, Entity, Invariants, Simulator, Analysis, Expectations, History, Spec, Guide
+  components/      Mermaid, FixModal, AckBadge, HelpLink, StateChip, StatePicker, Trace, Modal, PageHeader
   locales/         UI translations (en.json, it.json)
   diagrams.js      Mermaid generators (state diagram, context map)
   store.js         reactive store and API client

@@ -8,6 +8,7 @@ import PageHeader from '../components/PageHeader.vue'
 import Mermaid from '../components/Mermaid.vue'
 import StateChip from '../components/StateChip.vue'
 import Modal from '../components/Modal.vue'
+import Trace from '../components/Trace.vue'
 
 const m = computed(() => store.model)
 const ents = computed(() => m.value.entities.filter((e) => e.states.length))
@@ -43,7 +44,7 @@ async function setState(eid, sid) {
 
 // voce dello storico per un'azione eseguita (r: risposta di apply, o passo del replay)
 const historyEntry = (r, a, prev) => ({
-  kind: r.forced ? 'forced' : 'action', label: a.action, entity_id: a.entity_id, actor: a.actor,
+  kind: r.forced ? 'forced' : 'action', label: a.action, entity_id: a.entity_id, actor: a.actor, transition_id: a.transition_id,
   steps: r.steps, conflicts: r.conflicts, violations: r.violations, prev,
 })
 
@@ -94,6 +95,17 @@ async function loadScenario(id) {
   history.value = [{ kind: 'manual', label: t('sim.scenarioLoaded', { name: sc.name }), prev: { ...state.value } }]
   await evaluate()
 }
+// ---------- salva come test: la sequenza di azioni diventa un'aspettativa che deve continuare a funzionare ----------
+// solo azioni eseguite dallo stato iniziale: uno stato impostato a mano o un'azione forzata non sono riproducibili
+const canSaveTest = computed(() => history.value.length > 0 && history.value.every((h) => h.kind === 'action' && h.transition_id))
+const savingTest = ref(null)
+async function saveTest() {
+  const trace = [...history.value].reverse().map((h) => ({ transition_id: h.transition_id, entity_id: h.entity_id, action: h.label }))
+  await api.post('/expectations', { domain_id: m.value.id, name: savingTest.value.name, kind: 'path', expect: 'possible', trace })
+  savingTest.value = null
+  toast(t('exp.testSaved'))
+}
+
 async function saveScenario() {
   await api.post('/scenarios', { ...saving.value, domain_id: m.value.id, state: state.value, history: [] })
   saving.value = null
@@ -289,7 +301,11 @@ watch(locale, () => evaluation.value && evaluate())
         <div class="flex items-center gap-2 px-5 py-3 border-b border-zinc-100">
           <i class="fa-solid fa-clock-rotate-left fa-fw text-[14px] text-zinc-400" />
           <span class="text-sm font-semibold">{{ $t('sim.history') }}</span>
-          <button class="ml-auto btn-ghost !py-1 !text-xs" :disabled="!history.length" @click="undo(0)"><i class="fa-solid fa-arrow-rotate-left fa-fw text-[12px]" /> {{ $t('sim.undo') }}</button>
+          <button class="ml-auto btn-ghost !py-1 !text-xs" :disabled="!canSaveTest" @click="savingTest = { name: '' }"
+                  :title="$t(canSaveTest ? 'exp.saveTestHint' : 'exp.saveTestDisabled')">
+            <i class="fa-solid fa-bullseye fa-fw text-[12px]" /> {{ $t('exp.saveTest') }}
+          </button>
+          <button class="btn-ghost !py-1 !text-xs" :disabled="!history.length" @click="undo(0)"><i class="fa-solid fa-arrow-rotate-left fa-fw text-[12px]" /> {{ $t('sim.undo') }}</button>
         </div>
         <div v-if="!history.length" class="px-5 py-6 text-xs text-zinc-400 text-center">{{ $t('sim.historyEmpty') }}</div>
         <ol class="px-5 py-3 space-y-0">
@@ -325,6 +341,15 @@ watch(locale, () => evaluation.value && evaluate())
         <StateChip v-for="e in ents" :key="e.id" :id="state[e.id]" :entity-id="e.id" entity-prefix size="xs" />
       </div>
       <div class="flex justify-end"><button class="btn-accent" :disabled="!saving.name">{{ $t('common.save') }}</button></div>
+    </form>
+  </Modal>
+
+  <Modal v-if="savingTest" :title="$t('exp.saveTest')" @close="savingTest = null">
+    <form class="space-y-4" @submit.prevent="saveTest">
+      <p class="text-sm text-zinc-500">{{ $t('exp.saveTestHint') }}</p>
+      <div><label class="label">{{ $t('exp.testName') }}</label><input v-model="savingTest.name" class="input" required :placeholder="$t('exp.namePlaceholder')" /></div>
+      <Trace :steps="[...history].reverse().map((h) => ({ entity_id: h.entity_id, action: h.label }))" />
+      <div class="flex justify-end"><button class="btn-accent" :disabled="!savingTest.name">{{ $t('common.save') }}</button></div>
     </form>
   </Modal>
 </template>

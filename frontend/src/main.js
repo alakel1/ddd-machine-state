@@ -17,6 +17,11 @@ const router = createRouter({
     { path: '/d/:domainId/invariants', component: () => import('./views/InvariantsView.vue') },
     { path: '/d/:domainId/simulator', component: () => import('./views/SimulatorView.vue') },
     { path: '/d/:domainId/analysis', component: () => import('./views/AnalysisView.vue') },
+    { path: '/d/:domainId/history', component: () => import('./views/HistoryView.vue') },
+    { path: '/d/:domainId/expectations', component: () => import('./views/ExpectationsView.vue') },
+    { path: '/d/:domainId/spec', component: () => import('./views/SpecView.vue') },
+    { path: '/d/:domainId/guide', component: () => import('./views/GuideView.vue') },
+    { path: '/guide', component: () => import('./views/GuideView.vue') },
   ],
 })
 

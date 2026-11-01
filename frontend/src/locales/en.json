@@ -13,6 +13,224 @@
     "or": "or",
     "close": "Close"
   },
+  "history": {
+    "title": "Change history",
+    "subtitle": "Every change to the model leaves a version: see what changed, compare it with today and go back to it.",
+    "undo": "Undo",
+    "undoHint": "Undo the last change to the model (Ctrl+Z outside text fields)",
+    "undone": "Undone: {label}",
+    "nothingToUndo": "Nothing to undo",
+    "empty": "No changes recorded yet: the history starts from the next one.",
+    "latest": "latest",
+    "compare": "Compare with today",
+    "hideCompare": "Close comparison",
+    "restore": "Restore",
+    "confirmRestore": "Restore the model as it was before the change of {when}? The restore can be undone too.",
+    "restored": "Version restored",
+    "more": "{n} more…",
+    "noVisibleChange": "No visible difference in the model.",
+    "sinceThen": "One difference between this version and today | {n} differences between this version and today"
+  },
+  "guide": {
+    "eyebrow": "Guide",
+    "title": "Model concepts",
+    "subtitle": "What each element of the model means and how the analysis uses it, with an example for each.",
+    "open": "Open this entry in the Guide",
+    "groups": {
+      "model": "The model",
+      "rules": "Rules between entities",
+      "analysis": "Analysis and upkeep"
+    },
+    "entity": {
+      "title": "Entity",
+      "body": "A domain object with a lifecycle: an aggregate, an entity or a value object. Entities are grouped by bounded context, which becomes a box in the map.",
+      "example": "Order, Payment and Shipment are three entities; Order lives in the Sales context, Payment in Payments."
+    },
+    "states": {
+      "title": "States, initial and final",
+      "body": "The states the entity can be in. The initial one is where it starts when it has no creation actions; final states end the lifecycle: they have no outgoing actions and an effect with “skip if already final” leaves them alone.",
+      "example": "Order: DRAFT (initial) → CONFIRMED → PAID → CLOSED (final)."
+    },
+    "liveness": {
+      "title": "State liveness: active, off, deleted",
+      "body": "For each state you say whether the entity operates (active), exists but is disabled and can be turned back on (off), or is gone with no way back (deleted). DOES_NOT_EXIST counts as deleted. Compositions rely on this.",
+      "example": "Customer SUSPENDED is off (it can be reactivated); Customer REMOVED is deleted."
+    },
+    "creation": {
+      "title": "Creation actions",
+      "body": "An entity can come into existence in several ways, each with its own checks: a creation action starts from DOES_NOT_EXIST and leads to a birth state. Without creation actions the entity starts from its initial state.",
+      "example": "Order: “Order from website” or “Order from marketplace”, with different guards."
+    },
+    "actions": {
+      "title": "Actions (transitions)",
+      "body": "They move the entity from one state to another. They can have an actor, guards (conditions on other entities) and cascading effects (what happens to other entities).",
+      "example": "Order “ship” PAID → SHIPPING, run by the Warehouse."
+    },
+    "cascade": {
+      "title": "Cascade only",
+      "body": "An action the user does not run directly: it only happens as the effect of another one. The analysis reports the ones nothing triggers.",
+      "example": "Invoice “issue credit note” only happens when the Order return is recorded."
+    },
+    "guards": {
+      "title": "Guards",
+      "body": "Conditions on the states of other entities that must hold for the action to run. During a cascade they see the states already updated by the previous actions. Text rules are reminders to check by hand.",
+      "example": "“record payment” requires the Payment to be CAPTURED."
+    },
+    "guardsOr": {
+      "title": "OR guards",
+      "body": "Guards normally all apply together (AND). Linking them with OR, one of the group is enough.",
+      "example": "“ship” requires the Payment CAPTURED or a Customer with approved credit."
+    },
+    "guardsEach": {
+      "title": "“For each” guards",
+      "body": "On a child entity of a composition, the guard can apply to every existing parent: each parent must have at least one child in the given states (with “must not be in”: none).",
+      "example": "Confirming the Cart requires, for each Order, at least one AVAILABLE Order line."
+    },
+    "effects": {
+      "title": "Cascading effects",
+      "body": "What an action does to other entities: move them to a state, make them run an action by name, or create them. Each effect must find on the child a transition that exists and whose guards pass: if it does not, the cascade is blocked.",
+      "example": "Order “cancel” → Payment to CANCELLED (the Payment needs a transition to CANCELLED)."
+    },
+    "skipFinal": {
+      "title": "Skip if already final",
+      "body": "On an effect: if the entity involved is already in a final state it is left as is instead of reporting a conflict. Useful when the effect touches every instance and some are already concluded.",
+      "example": "Cancelling the order cancels its lines, except the ones already SHIPPED."
+    },
+    "composition": {
+      "title": "Composition",
+      "body": "A relation where the child cannot exist without the parent: when the parent is deleted the child must go, when it is turned off the child cannot stay active. Invariants and automatic checks follow from it.",
+      "example": "Order line is composed in Order: once the order is deleted, its lines must be deleted."
+    },
+    "instances": {
+      "title": "Multiple instances",
+      "body": "On a composition you can ask the analysis to simulate 2-3 children per parent (#1, #2), to find cases like “one child confirmed and the other deleted”. Each parent copy has its own child copies. The simulator stays at one instance.",
+      "example": "Order with 2 Lines: the analysis also explores Line #1 SHIPPED with Line #2 CANCELLED."
+    },
+    "invariants": {
+      "title": "Invariants",
+      "body": "Combinations of states that must never exist together. The analysis looks for a path that gets there and, if it finds one, shows the shortest.",
+      "example": "Forbidden: Order CANCELLED with Shipment SHIPPED."
+    },
+    "analysis": {
+      "title": "Edge case analysis",
+      "body": "It explores every combination of states reachable from the initial state and reports violable invariants, blocked cascades, missing transitions, deadlocks, never reached states and never executable actions. The “by cause” view groups the symptoms of the same cause.",
+      "example": "12 findings from 4 causes: fixing one cause removes all its symptoms."
+    },
+    "missing": {
+      "title": "Missing transitions",
+      "body": "A cascading effect asks an entity to move from one state to another, but that transition does not exist. Add it (usually “cascade only”), or review the effect.",
+      "example": "Cancelling the order asks the Payment for FAILED → CANCELLED, which does not exist."
+    },
+    "conflicts": {
+      "title": "Blocked cascades",
+      "body": "An action cannot complete its effects: a transition is missing, a guard blocks, the effects trigger each other forever, or it is unclear which action to pick. Each case suggests where to step in.",
+      "example": "Order “record return” is blocked because the credit note requires the Invoice ISSUED and finds it CANCELLED."
+    },
+    "deadlock": {
+      "title": "Deadlock",
+      "body": "A combination where no action can run and some entity is not concluded. It is often a consequence of other causes: replay the path in the simulator to see which guard stops the actions.",
+      "example": "Shipment LOST with no outgoing action."
+    },
+    "fix": {
+      "title": "Fix and preview",
+      "body": "For many findings the system proposes fixes you can apply with one click. “Preview” runs the analysis on the changed model without touching it and tells how many errors it solves or introduces.",
+      "example": "“Add to Payment the transition from FAILED to CANCELLED”: solves 2 errors."
+    },
+    "ack": {
+      "title": "Accept or postpone",
+      "body": "If a finding is intended, accept it with a note; if you will think about it later, postpone it. It leaves the counts until the part of the model involved changes: then it comes back as “needs review”.",
+      "example": "“Refunds without invoice are handled by the back office”: accepted."
+    },
+    "expectations": {
+      "title": "Expectations",
+      "body": "Acceptance tests of the domain: goals that must stay reachable and paths (saved from the simulator) that must work or stay blocked. They are checked at every analysis.",
+      "example": "Goal: it must be possible to reach Order DELIVERED with Payment CAPTURED."
+    },
+    "history": {
+      "title": "History and Undo",
+      "body": "Every change to the model leaves a version. Undo (Ctrl+Z outside text fields) goes back one step; from the History you compare a version with today and restore it.",
+      "example": "A fix applied by mistake is undone with Ctrl+Z."
+    }
+  },
+  "spec": {
+    "eyebrow": "Functional specification",
+    "hint": "The domain document, always in sync with the model. For a PDF: Print → Save as PDF.",
+    "print": "Print / PDF",
+    "counts": "{entities} entities, {invariants} invariants",
+    "contents": "Contents",
+    "map": "Context map",
+    "state": "State",
+    "kind": "Type",
+    "actions": "Actions",
+    "from": "From",
+    "action": "Action",
+    "to": "To",
+    "cascadeOnly": "cascade only",
+    "none": "None.",
+    "open": "Open points",
+    "openHint": "The causes still open found by the edge case analysis (accepted ones excluded).",
+    "noOpen": "No open points."
+  },
+  "exp": {
+    "eyebrow": "Acceptance tests",
+    "title": "Expectations",
+    "subtitle": "What the domain must allow: goals that must stay reachable and paths that must work. They are checked at every analysis: if a change breaks one, you see it right away.",
+    "addGoal": "Goal",
+    "check": "Check",
+    "checking": "Checking the expectations…",
+    "empty": "No expectations yet. Add a goal (“it must be possible to reach Order DELIVERED”) or, from the simulator, save as a test a sequence of actions that must keep working.",
+    "summary": "expectations met",
+    "goal": "Goal",
+    "path": {
+      "possible": "Path that must work",
+      "blocked": "Path that must stay blocked"
+    },
+    "reach": "It must be possible to reach",
+    "reachedIn": "Reachable with one action: | Reachable in {n} actions:",
+    "unreachable": "Unreachable: this combination is never reached from the initial state.",
+    "noConditions": "No conditions: add at least one.",
+    "pathOk": "It works: every action runs.",
+    "pathBlockedOk": "It stops at step {n} (“{action}”), as expected.",
+    "pathFails": "It gets stuck at step {n} (“{action}”):",
+    "pathShouldBlock": "It should be blocked, but it runs to the end.",
+    "pathHint": "Paths are created from the simulator: run the actions and press “Save as test” in the history.",
+    "edit": "Edit expectation",
+    "new": "New goal",
+    "namePlaceholder": "e.g. A paid order can be delivered",
+    "expect": "Expected outcome",
+    "conditions": "Combination to reach",
+    "conditionsHint": "(all true at the same time)",
+    "saved": "Expectation saved",
+    "saveTest": "Save as test",
+    "saveTestHint": "Save the sequence of actions as an expectation: it must keep working after every change",
+    "saveTestDisabled": "Only sequences of actions run from the initial state, without states set by hand or forced actions",
+    "testName": "Test name",
+    "testSaved": "Test saved among the expectations"
+  },
+  "ack": {
+    "title": "Or is it not a mistake?",
+    "notePlaceholder": "Why it is fine as is (optional)",
+    "accept": "It's intended: accept",
+    "later": "I'll think about it later",
+    "reopen": "Reopen",
+    "current": {
+      "accepted": "Accepted: it no longer counts among open findings.",
+      "later": "Postponed: it no longer counts among open findings."
+    },
+    "staleHint": "It was accepted, but the part of the model involved has changed since then: it needs another look.",
+    "done": {
+      "accepted": "Finding accepted",
+      "later": "Finding postponed"
+    },
+    "reopened": "Finding reopened",
+    "badge": {
+      "accepted": "accepted",
+      "later": "postponed",
+      "stale": "needs review"
+    },
+    "show": "Accepted and postponed ({n})",
+    "hide": "Hide accepted and postponed"
+  },
   "fix": {
     "button": "Fix",
     "title": "Fix",
@@ -20,13 +238,24 @@
     "suggested": "suggested",
     "apply": "Apply",
     "applied": "Fix applied: analysis updated",
-    "undoHint": "The change is applied to the model right away; you can always review it in the entity page.",
+    "undoHint": "The change is applied to the model right away; undo it with Undo (Ctrl+Z) or from the History.",
+    "preview": {
+      "button": "Preview",
+      "loading": "Running the analysis on the changed model…",
+      "solves": "Solves {what}",
+      "solvesNothing": "Solves nothing on its own",
+      "introduces": "introduces {what}",
+      "errors": "one error | {n} errors",
+      "warnings": "one warning | {n} warnings",
+      "and": " and "
+    },
     "manual": {
       "default": "There is no safe automatic fix for this case: open the entity and review the actions involved.",
       "deadlock": "No action can run in this combination of states. Replay the path in the simulator: blocked actions show which guard stops them.",
       "dead_actions": "The action can never run without conflicts: check its guards and, if it is cascade-only, that something triggers it.",
       "reachability": "The state is never reached: no action leads to it, or the guards of those that do are never satisfied.",
-      "relations": "This is a hint about how relations are drawn: declare (or remove) them from the entity page."
+      "relations": "This is a hint about how relations are drawn: declare (or remove) them from the entity page.",
+      "expectations": "A domain expectation is no longer met. Open the Expectations: for a path, see where it gets stuck and why; for a goal, check the actions that should lead there."
     }
   },
   "nav": {
@@ -37,6 +266,10 @@
     "invariants": "Invariants",
     "simulator": "Simulator",
     "analysis": "Edge case analysis",
+    "history": "History",
+    "expectations": "Expectations",
+    "spec": "Specification",
+    "guide": "Guide",
     "entities": "Entities",
     "newEntity": "New entity",
     "specMd": "Spec .md",
@@ -253,6 +486,7 @@
       "guards": "guards",
       "invariants": "invariants",
       "effect_conflict": "blocked cascade",
+      "expectations": "expectations",
       "missing_transition": "missing transitions",
       "deadlock": "deadlock",
       "dead_actions": "dead actions",
@@ -261,6 +495,12 @@
       "liveness": "state liveness"
     },
     "noIssues": "No problems found with these filters.",
+    "view": {
+      "causes": "By cause",
+      "list": "List",
+      "summary": "{issues} findings from {causes} causes",
+      "showIssues": "See the finding | See the {n} findings"
+    },
     "openEntity": "Open entity",
     "shortestPath": "Shortest path ({n} step) | Shortest path ({n} steps)",
     "replay": "Replay",
@@ -322,7 +562,7 @@
     "cascadeOnly": "Cascade only",
     "cascadeOnlyTag": "cascade only",
     "cascadeOnlyHint": "Not executed directly: it only happens as the effect of another action",
-    "cascadeOnlyLong": "Not executed directly: it only happens as the effect of another action (e.g. a tender phase is created only by creating the procedure).",
+    "cascadeOnlyLong": "Not executed directly: it only happens as the effect of another action (e.g. the credit note is issued only by recording the order return).",
     "matrix": "States × actions table",
     "matrixHint": "Empty cells are unhandled combinations: check that this is intended.",
     "matrixCorner": "state \\ action",
@@ -358,6 +598,8 @@
     "onState": "on state",
     "rule": "rule",
     "mustBeIn": "must be in",
+    "and": "AND",
+    "or": "OR",
     "mustNotBeIn": "must not be in",
     "eachNone": "{entity}: all existing instances",
     "eachOption": "for each {parent}",

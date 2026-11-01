@@ -23,7 +23,7 @@ NONE = 0  # stato implicito "non esiste" (gli id SQLite partono da 1)
 MAX_CASCADE_DEPTH = 8
 DEFAULT_EXPLORE_LIMIT = 1_000_000
 _EXPLORE_CACHE: "OrderedDict[tuple, dict]" = OrderedDict()  # esplorazioni recenti, per modello e limite
-_EXPLORE_CACHE_SIZE = 6
+_EXPLORE_CACHE_SIZE = 4  # un'esplorazione grande (centinaia di migliaia di stati) occupa centinaia di MB
 _EXPLORE_LOCK = threading.Lock()  # richieste parallele sullo stesso modello aspettano il primo calcolo
 
 
@@ -55,10 +55,12 @@ class Engine:
                 if g["kind"] == "state" and g.get("each_entity_id") and "each" not in g:
                     p = self.entity.get(g["each_entity_id"])
                     g["each"] = [[p["id"], gone_states(p), [g["entity_id"]]]] if p and p["states"] else None
+        # per azione: clausole in AND, ognuna una lista di guardie alternative (vedi clauses)
         self._guards_fast = {
-            t["id"]: [(g["entity_id"], tuple(g.get("entity_ids") or ()), frozenset(g["state_ids"]), bool(g["negate"]),
-                       tuple((pid, frozenset(gone), tuple(kids)) for pid, gone, kids in g.get("each") or ()))
-                      for g in t["guards"] if g["kind"] == "state" and g.get("entity_id") is not None]
+            t["id"]: self.clauses([(g["entity_id"], tuple(g.get("entity_ids") or ()), frozenset(g["state_ids"]),
+                                    bool(g["negate"]), tuple((pid, frozenset(gone), tuple(kids)) for pid, gone, kids in g.get("each") or ()),
+                                    g.get("alt_group") or 0)
+                                   for g in t["guards"] if g["kind"] == "state" and g.get("entity_id") is not None])
             for t in self.transitions}
         # invarianti sulla chiave di stato (tupla): regole come (posizioni, stati, negate),
         # più l'indice posizione -> invarianti che la leggono, per ricontrollare solo quelle toccate da una mossa
@@ -147,62 +149,89 @@ class Engine:
             out = self._outgoing[key] = [t for t in self.entity[eid]["transitions"] if self.applies_from(t, sid)]
         return out
 
-    def guard_failures(self, t: dict, state: dict) -> list[str]:
-        fails = []
-        for g in t["guards"]:
-            if g["kind"] == "state" and g.get("each"):
-                names = ", ".join(self.sname(s) for s in g["state_ids"]) or "—"
-                for pid, gone, kids in g["each"]:
-                    cur = [state.get(x, NONE) for x in kids]
-                    if state.get(pid, NONE) in gone or any(s in g["state_ids"] for s in cur) != bool(g["negate"]):
-                        continue
-                    fails.append(
-                        self.t("guard.fail_each_not" if g["negate"] else "guard.fail_each", parent=self.ename(pid),
-                               entity=self.ename(kids[0]), states=names, current=", ".join(self.sname(s) for s in cur))
-                        + (f" — {g['description']}" if g["description"] else "")
-                    )
-                continue
-            if g["kind"] != "state" or g["entity_id"] not in state:
-                continue
-            check = lambda s: (s not in g["state_ids"]) if g["negate"] else (s in g["state_ids"])
-            if g.get("entity_ids"):
-                # entità con più istanze (analisi): vale per tutte le istanze esistenti
-                existing = [x for x in g["entity_ids"] if state.get(x, NONE) != NONE] or g["entity_ids"][:1]
-                bad = [x for x in existing if not check(state[x])]
-                ok, cur = not bad, state[bad[0]] if bad else None
-                if bad:
-                    g = {**g, "entity_id": bad[0]}
+    @staticmethod
+    def clauses(guards: list) -> list[list]:
+        """Guardie in AND di clausole: le guardie con lo stesso alt_group (≠ 0) sono alternative (OR) tra loro."""
+        out, groups = [], {}
+        for g in guards:
+            alt = g.get("alt_group") if isinstance(g, dict) else g[-1]
+            if alt:
+                if alt not in groups:
+                    groups[alt] = []
+                    out.append(groups[alt])
+                groups[alt].append(g)
             else:
-                cur = state[g["entity_id"]]
-                ok = check(cur)
-            if not ok:
-                names = ", ".join(self.sname(s) for s in g["state_ids"]) or "—"
-                op = self.t("guard.must_not" if g["negate"] else "guard.must")
+                out.append([g])
+        return out
+
+    def guard_failures(self, t: dict, state: dict) -> list[str]:
+        """Perché le guardie di stato di t non passano: una voce per clausola che fallisce."""
+        fails = []
+        for clause in self.clauses([g for g in t["guards"] if g["kind"] == "state"]):
+            per = [self._guard_messages(g, state) for g in clause]
+            if not all(per):  # basta un'alternativa soddisfatta
+                continue
+            if len(clause) == 1:
+                fails += per[0]
+            else:
+                fails.append(self.t("guard.any_of", items=" / ".join(x for msgs in per for x in msgs)))
+        return fails
+
+    def _guard_messages(self, g: dict, state: dict) -> list[str]:
+        """Messaggi di una singola guardia di stato che non passa (lista vuota se passa)."""
+        fails = []
+        if g.get("each"):
+            names = ", ".join(self.sname(s) for s in g["state_ids"]) or "—"
+            for pid, gone, kids in g["each"]:
+                cur = [state.get(x, NONE) for x in kids]
+                if state.get(pid, NONE) in gone or any(s in g["state_ids"] for s in cur) != bool(g["negate"]):
+                    continue
                 fails.append(
-                    self.t("guard.fail", entity=self.ename(g["entity_id"]), op=op, states=names, current=self.sname(cur))
+                    self.t("guard.fail_each_not" if g["negate"] else "guard.fail_each", parent=self.ename(pid),
+                           entity=self.ename(kids[0]), states=names, current=", ".join(self.sname(s) for s in cur))
                     + (f" — {g['description']}" if g["description"] else "")
                 )
+            return fails
+        if g.get("entity_id") is None or g["entity_id"] not in state:
+            return fails
+        check = lambda s: (s not in g["state_ids"]) if g["negate"] else (s in g["state_ids"])
+        eid = g["entity_id"]
+        if g.get("entity_ids"):
+            # entità con più istanze (analisi): vale per tutte le istanze esistenti
+            existing = [x for x in g["entity_ids"] if state.get(x, NONE) != NONE] or g["entity_ids"][:1]
+            bad = [x for x in existing if not check(state[x])]
+            if not bad:
+                return fails
+            eid = bad[0]
+        elif check(state[eid]):
+            return fails
+        names = ", ".join(self.sname(s) for s in g["state_ids"]) or "—"
+        op = self.t("guard.must_not" if g["negate"] else "guard.must")
+        fails.append(self.t("guard.fail", entity=self.ename(eid), op=op, states=names, current=self.sname(state[eid]))
+                     + (f" — {g['description']}" if g["description"] else ""))
         return fails
 
     def guards_ok(self, t: dict, state: dict) -> bool:
         """Come guard_failures, ma solo sì/no: senza costruire messaggi (usata nell'esplorazione)."""
-        for eid, many, ids, neg, each in self._guards_fast[t["id"]]:
-            if each:
-                # per ogni padre esistente: almeno un suo figlio negli stati (con negate: nessuno)
-                for pid, gone, kids in each:
-                    if state.get(pid, NONE) not in gone and any(state.get(x, NONE) in ids for x in kids) == neg:
-                        return False
-                continue
-            if eid not in state:
-                continue
-            if many:
-                existing = [state[x] for x in many if state.get(x, NONE) != NONE] or [state[many[0]]]
-            else:
-                existing = (state[eid],)
-            for s in existing:
-                if (s in ids) == neg:
-                    return False
+        for clause in self._guards_fast[t["id"]]:
+            if not any(self._fast_ok(g, state) for g in clause):
+                return False
         return True
+
+    @staticmethod
+    def _fast_ok(g: tuple, state: dict) -> bool:
+        eid, many, ids, neg, each, _ = g
+        if each:
+            # per ogni padre esistente: almeno un suo figlio negli stati (con negate: nessuno)
+            return not any(state.get(pid, NONE) not in gone and any(state.get(x, NONE) in ids for x in kids) == neg
+                           for pid, gone, kids in each)
+        if eid not in state:
+            return True
+        if many:
+            existing = [state[x] for x in many if state.get(x, NONE) != NONE] or [state[many[0]]]
+        else:
+            existing = (state[eid],)
+        return all((s in ids) != neg for s in existing)
 
     def rule_notes(self, t: dict) -> list[str]:
         return [g["description"] for g in t["guards"] if g["kind"] == "rule" and g["description"]]
@@ -210,24 +239,27 @@ class Engine:
     def guard_misses(self, t: dict, state: dict) -> list[dict]:
         """Guardie di stato di t che non passano, con gli stati che hanno trovato (per proporre come allargarle)."""
         out = []
-        for g in t["guards"]:
-            if g["kind"] != "state" or g.get("entity_id") is None:
-                continue
-            if g.get("each"):
-                cur = []
-                for pid, gone, kids in g["each"]:
-                    found = [state.get(x, NONE) for x in kids]
-                    if state.get(pid, NONE) not in gone and any(s in g["state_ids"] for s in found) == bool(g["negate"]):
-                        cur += found
-            else:
-                ids = g.get("entity_ids") or [g["entity_id"]]
-                if g["entity_id"] not in state:
-                    continue
-                existing = [x for x in ids if state.get(x, NONE) != NONE] or ids[:1]
-                cur = [state[x] for x in existing if (state[x] in g["state_ids"]) == bool(g["negate"])]
-            if cur:
-                out.append({"guard_id": g["id"], "transition_id": t.get("base_id", t["id"]), "current": sorted(set(cur))})
+        for clause in self.clauses([g for g in t["guards"] if g["kind"] == "state" and g.get("entity_id") is not None]):
+            misses = [m for g in clause for m in self._guard_miss(t, g, state)]
+            if len(misses) == len(clause):  # nessuna alternativa passa: tutte vanno proposte
+                out += misses
         return out
+
+    def _guard_miss(self, t: dict, g: dict, state: dict) -> list[dict]:
+        """La guardia g di t, se non passa, con gli stati trovati; lista vuota se passa."""
+        if g.get("each"):
+            cur = []
+            for pid, gone, kids in g["each"]:
+                found = [state.get(x, NONE) for x in kids]
+                if state.get(pid, NONE) not in gone and any(s in g["state_ids"] for s in found) == bool(g["negate"]):
+                    cur += found
+        else:
+            if g["entity_id"] not in state:
+                return []
+            ids = g.get("entity_ids") or [g["entity_id"]]
+            existing = [x for x in ids if state.get(x, NONE) != NONE] or ids[:1]
+            cur = [state[x] for x in existing if (state[x] in g["state_ids"]) == bool(g["negate"])]
+        return [{"guard_id": g["id"], "transition_id": t.get("base_id", t["id"]), "current": sorted(set(cur))}] if cur else []
 
     def _conflict(self, t: dict, what: str, eid, depth: int, reason: str, details=(), gap=None, fix=None,
                   effect=None, misses=()) -> dict:
@@ -328,7 +360,7 @@ class Engine:
         cur = state[eid]
         what = lambda: self.t("effect.what_action", entity=self.ename(eid), name=name)
         if cur == NONE:
-            # nessuna istanza da coinvolgere (es. un regolamento senza modelli): l'effetto non si applica
+            # nessuna istanza da coinvolgere (es. un ordine senza righe): l'effetto non si applica
             return state, [{"transition_id": None, "entity_id": eid, "action": self.t("step.missing_action", action=name),
                             "from": cur, "to": cur, "depth": depth + 1, "skipped": True}], []
         same_name = [c for c in self.entity[eid]["transitions"] if c["action"].strip().lower() == name.lower()]
@@ -618,25 +650,59 @@ class Engine:
                 if len(deadlocks) < 25:
                     deadlocks.append(k)
 
-        def trace(key):
-            out = []
-            while parent[key] is not None:
-                prev, tid = parent[key]
-                t = self.transition[tid]
-                out.append({"transition_id": tid, "entity_id": t["entity_id"], "action": t["action"],
-                            "to": t["to_state_id"], "create": is_create(t)})
-                key = prev
-            return list(reversed(out))
-
+        trace = lambda key: self._trace(parent, key)
         return {
             "start": start,
-            "reachable": set(parent.keys()),
+            # in ordine di scoperta (BFS): il primo stato che soddisfa una condizione ha il percorso più breve
+            "reachable": parent.keys(),
+            "parent": parent,
             "truncated": truncated,
             "enabled_ever": enabled_ever,
             "violations": [{**v, "state": self.from_key(v["key"]), "trace": trace(v["key"])} for v in violations.values()],
             "conflicts": [{**c, "state": self.from_key(c["key"]), "trace": trace(c["key"])} for c in conflicts.values()],
             "deadlocks": [{"state": self.from_key(k), "trace": trace(k)} for k in deadlocks],
         }
+
+    def _trace(self, parent: dict, key: tuple) -> list[dict]:
+        """Percorso più breve dallo stato iniziale a key, dalla mappa dei predecessori dell'esplorazione."""
+        out = []
+        while parent[key] is not None:
+            prev, tid = parent[key]
+            t = self.transition[tid]
+            out.append({"transition_id": tid, "entity_id": t["entity_id"], "action": t["action"],
+                        "to": t["to_state_id"], "create": is_create(t)})
+            key = prev
+        return list(reversed(out))
+
+    # ---------- aspettative ----------
+    def check_expectation(self, x: dict) -> dict:
+        """Verifica un'aspettativa. kind="goal": la combinazione di stati (rules, come le invarianti) dev'essere
+        raggiungibile dallo stato iniziale; kind="path": il percorso (trace) dev'essere eseguibile ("possible")
+        oppure bloccato ("blocked"). Ritorna {ok, trace} per un obiettivo, {ok, done, total, failed, reason} per un percorso."""
+        if x["kind"] == "goal":
+            rules = [(r["entity_id"], set(r.get("state_ids", [])), bool(r.get("negate")))
+                     for r in x.get("rules") or [] if r["entity_id"] in self.order]
+            if not rules:
+                return {"ok": False, "empty": True}
+            pos = {eid: i for i, eid in enumerate(self.order)}
+            ex = self.explore()
+            for k in ex["reachable"]:
+                if all((k[pos[e]] in ids) != neg for e, ids, neg in rules):
+                    return {"ok": True, "trace": self._trace(ex["parent"], k), "state": self.from_key(k)}
+            return {"ok": False, "trace": None, "truncated": ex["truncated"]}
+        trace = x.get("trace") or []
+        r = self.replay(trace)
+        done = len(r["history"])
+        failed = reason = None
+        if done < len(trace):
+            step = trace[done]
+            t = self.transition.get(int(step["transition_id"]))
+            failed = step.get("action") or (t and t["action"])
+            res = self.apply(r["state"], t["id"]) if t else {"error": self.t("apply.no_transition")}
+            reason = res.get("error", "") + (f": {res['reasons'][0]}" if res.get("reasons") else "")
+        possible = done == len(trace)
+        ok = possible if x.get("expect", "possible") == "possible" else not possible
+        return {"ok": ok, "done": done, "total": len(trace), "failed": failed, "reason": reason}
 
     # ---------- analisi edge case ----------
     def _guard_sig(self, g: dict):
@@ -645,7 +711,7 @@ class Engine:
         return ("state", g["entity_id"], tuple(sorted(g["state_ids"])), bool(g["negate"]), g.get("each_entity_id"))
 
     def _guard_text(self, g: dict) -> str:
-        """Guardia in forma leggibile: "Procedura in CREATA, INDETTA o COMPILATA"."""
+        """Guardia in forma leggibile: "Pagamento in AUTORIZZATO o CATTURATO"."""
         if g["kind"] == "rule":
             return self.t("q", x=g["description"])
         names = [self.sname(s) for s in g["state_ids"]]
@@ -720,12 +786,17 @@ class Engine:
         return seen
 
     def _covers(self, own: dict, req: dict) -> bool:
-        """La guardia own è almeno severa quanto req (es. Procedura ∈ {A, B} copre Procedura ∈ {A, B, C})."""
+        """La guardia own è almeno severa quanto req (es. Ordine ∈ {A, B} copre Ordine ∈ {A, B, C})."""
         if own["kind"] != "state" or req["kind"] != "state" or own["entity_id"] != req["entity_id"] \
                 or bool(own["negate"]) != bool(req["negate"]) or own.get("each_entity_id") != req.get("each_entity_id"):
             return self._guard_sig(own) == self._guard_sig(req)
         a, b = set(own["state_ids"]), set(req["state_ids"])
         return a >= b if own["negate"] else a <= b
+
+    def dynamic(self) -> tuple["Engine", dict]:
+        """Il motore su cui gira l'esplorazione dell'analisi: il modello con le istanze multiple, se ce ne sono."""
+        expanded, labels = expand(self.model, self.t)
+        return (Engine(expanded, self.t.lang) if labels else self), labels
 
     def analyze(self, limit: int = DEFAULT_EXPLORE_LIMIT) -> dict:
         issues = []
@@ -799,7 +870,9 @@ class Engine:
                 guarded = [t for t in incoming if t["guards"]]
                 if not guarded:
                     continue
-                required = set.intersection(*({self._guard_sig(g) for g in t["guards"]} for t in incoming)) if incoming else set()
+                # solo le guardie obbligatorie: un'alternativa (OR) non è un controllo che si possa saltare
+                required = set.intersection(*({self._guard_sig(g) for g in t["guards"] if not g.get("alt_group")}
+                                              for t in incoming)) if incoming else set()
                 missing = [g for g in guarded[0]["guards"] if self._guard_sig(g) in required
                            and not any(self._covers(o, g) for o in c["guards"])]
                 p = {"action": c["action"], "entity": name, "state": self.sname(c["to_state_id"])}
@@ -832,8 +905,7 @@ class Engine:
         issues += relation_issues(self.model, self.sname, T)
 
         # --- analisi dinamica (esplorazione), sul modello con le istanze multiple ---
-        expanded, labels = expand(self.model, T)
-        dyn = Engine(expanded, T.lang) if labels else self
+        dyn, labels = self.dynamic()
         ex = dyn.explore(limit=limit)
         for v in ex["violations"]:
             add("error" if v["severity"] == "error" else "warning", "invariants", "a.violable",
@@ -892,6 +964,14 @@ class Engine:
             ids += relation_ends.get(i.get("relation_id"), [])
             i["entity_ids"] = sorted({base(x) for x in ids if x is not None})
             i["fixes"] = fixes_for(self, i, inv=inv, base=base, tbase=tbase)
+            i["fingerprint"] = self._fingerprint(i, base, tbase)
+            i["context"] = self._context_hash(i["entity_ids"], inv)
+            i["cause"] = self._cause(i, inv, base, tbase)
+        # un'azione mai eseguibile perché va sempre in conflitto ha la causa di quei conflitti
+        by_trigger = {i["transition_id"]: i["cause"] for i in issues if i["category"] == "effect_conflict"}
+        for i in issues:
+            if i["category"] == "dead_actions" and i.get("transition_id") in by_trigger:
+                i["cause"] = by_trigger[i["transition_id"]]
         order = {"error": 0, "warning": 1, "info": 2}
         issues.sort(key=lambda i: order.get(i["severity"], 3))
         return {
@@ -907,6 +987,66 @@ class Engine:
             },
             "labels": {str(k): v for k, v in labels.items()},
         }
+
+    def _fingerprint(self, i: dict, base, tbase) -> str:
+        """Impronta stabile di una segnalazione: non dipende da lingua, testi o istanze #1/#2
+        (le copie dello stesso caso hanno la stessa impronta, e si accettano insieme)."""
+        c = i.get("conflict") or {}
+        gap = c.get("gap") or i.get("gap") or {}
+        parts = [i["category"], i.get("code"), i.get("entity_id") and base(i["entity_id"]),
+                 i.get("transition_id") and tbase(i["transition_id"]), i.get("state_id"), i.get("relation_id"),
+                 str(i.get("invariant_id")).split("#")[0] if i.get("invariant_id") is not None else None,
+                 c.get("trigger_id") and tbase(c["trigger_id"]), c.get("entity_id") and base(c["entity_id"]),
+                 c.get("effect_id"), gap.get("from"), gap.get("to"), (gap.get("action") or "").lower() or None,
+                 sorted({m["guard_id"] for m in c.get("misses") or ()})]
+        if i["category"] == "deadlock":
+            parts.append(sorted({(base(e), s) for e, s in i["state"].items() if s != NONE}))
+        if i["category"] == "relations":
+            parts.append(i.get("entity_ids"))
+        return hashlib.sha1(json.dumps(parts, default=str).encode()).hexdigest()[:16]
+
+    def _cause(self, i: dict, inv: dict | None, base, tbase) -> dict:
+        """La causa di una segnalazione: segnalazioni con la stessa causa si risolvono insieme.
+        {"key", "title"}; senza una causa comune riconoscibile, la segnalazione è causa di se stessa."""
+        T, q = self.t, lambda x: self.t("q", x=x)
+        c = i.get("conflict") or {}
+        gap = c.get("gap") or (i.get("gap") if i["category"] == "missing_transition" else None)
+        child = base(c["entity_id"]) if c.get("entity_id") is not None else i.get("entity_id")
+        if gap and self.is_final(gap["from"]) and c.get("effect_id") is not None:
+            trig = self.transition.get(tbase(c["trigger_id"]))
+            return {"key": f"skip:{c['effect_id']}",
+                    "title": T("c.skip_final", action=trig["action"] if trig else "?",
+                               parent=self.ename(trig["entity_id"]) if trig else "?", child=self.ename(child))}
+        if gap:
+            if gap.get("action"):
+                return {"key": f"gap:{child}:{gap['from']}:a:{gap['action'].lower()}",
+                        "title": T("c.gap_action", entity=self.ename(child), action=gap["action"], src=self.sname(gap["from"]))}
+            return {"key": f"gap:{child}:{gap['from']}:{gap['to']}",
+                    "title": T("c.gap", entity=self.ename(child), src=self.sname(gap["from"]), dst=self.sname(gap["to"]))}
+        if c.get("misses"):
+            m = c["misses"][0]
+            owner = self.transition.get(m["transition_id"])
+            return {"key": "guard:" + ",".join(str(x) for x in sorted({m["guard_id"] for m in c["misses"]})),
+                    "title": T("c.guard", action=owner["action"] if owner else "?", entity=self.ename(owner["entity_id"]) if owner else "?")}
+        rel_id = i.get("relation_id") or (inv or {}).get("relation_id")
+        if rel_id is not None and (i["category"] == "composition" or (inv or {}).get("derived")):
+            r = next((r for r in self.model.get("relations", []) if r["id"] == rel_id), None)
+            if r:
+                return {"key": f"relation:{rel_id}",
+                        "title": T("c.relation", parent=self.ename(r["source_id"]), child=self.ename(r["target_id"]))}
+        if i["category"] == "deadlock":
+            return {"key": "deadlock", "title": T("c.deadlock")}
+        if inv is not None:
+            return {"key": f"invariant:{inv['id']}", "title": i["title"].split(" (")[0]}
+        return {"key": f"self:{i['fingerprint']}", "title": i["title"]}
+
+    def _context_hash(self, entity_ids: list, inv: dict | None) -> str:
+        """Impronta della parte di modello coinvolta: se cambia, una segnalazione accettata va rivista."""
+        ids = set(entity_ids)
+        part = [self.entity[e] for e in sorted(ids) if e in self.entity]
+        part += [r for r in self.model.get("relations", []) if r["source_id"] in ids or r["target_id"] in ids]
+        part += [inv] if inv else []
+        return hashlib.sha1(json.dumps(part, sort_keys=True, default=str).encode()).hexdigest()[:16]
 
     def _missing_transitions(self, dyn: "Engine", conflicts: list, labels: dict) -> list[dict]:
         """Transizioni che mancano a un'entità perché gli effetti a cascata che la coinvolgono si possano applicare.

@@ -5,6 +5,7 @@ import { store, api, reloadModel, ename, entity, toast, goneStates, offStates } 
 import { t } from '../i18n'
 import Modal from './Modal.vue'
 import StateChip from './StateChip.vue'
+import HelpLink from './HelpLink.vue'
 
 // relation: relazione esistente da modificare, oppure null per una nuova (sourceId = padre proposto)
 const props = defineProps({ relation: Object, sourceId: Number })
@@ -70,7 +71,7 @@ async function save() {
           <input type="checkbox" class="accent-indigo-600 mt-1" :checked="!!r.composition"
                  @change="(ev) => (r.composition = ev.target.checked ? 1 : 0)" />
           <span>
-            <span class="text-sm font-semibold flex items-center gap-1.5"><i class="fa-solid fa-cubes-stacked" /> {{ $t('model.composition') }}</span>
+            <span class="text-sm font-semibold flex items-center gap-1.5"><i class="fa-solid fa-cubes-stacked" /> {{ $t('model.composition') }} <HelpLink topic="composition" /></span>
             <i18n-t scope="global" keypath="model.compositionHint" tag="span" class="block text-xs text-zinc-500">
               <template #child><b>{{ ename(r.target_id) }}</b></template>
               <template #parent><b>{{ ename(r.source_id) }}</b></template>
@@ -92,7 +93,7 @@ async function save() {
           </div>
           <p class="text-xs text-zinc-500">{{ $t('model.livenessRule', { parent: ename(r.source_id), child: ename(r.target_id) }) }}</p>
           <div class="flex items-center gap-3">
-            <label class="label !mb-0">{{ $t('model.instancesLabel', { child: ename(r.target_id), parent: ename(r.source_id) }) }}</label>
+            <label class="label !mb-0">{{ $t('model.instancesLabel', { child: ename(r.target_id), parent: ename(r.source_id) }) }} <HelpLink topic="instances" /></label>
             <select v-model.number="r.instances" class="input !w-20 !py-1.5">
               <option v-for="n in [1, 2, 3]" :key="n" :value="n">{{ n }}</option>
             </select>

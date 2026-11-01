@@ -1,7 +1,7 @@
 <script setup>
 import { computed, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { store, api, reloadModel, mutate, entity, ename, sname, toast, isCreatable, goneStates, offStates } from '../store'
+import { store, api, reloadModel, mutate, entity, ename, sname, toast, isCreatable, goneStates, offStates, plainTitle } from '../store'
 import { pal, KINDS, COLORS, PALETTE } from '../colors'
 import { t } from '../i18n'
 import { stateDiagram, contextMap, neighborhood } from '../diagrams'
@@ -12,6 +12,9 @@ import StateChip from '../components/StateChip.vue'
 import StatePicker from '../components/StatePicker.vue'
 import RelationModal from '../components/RelationModal.vue'
 import FixModal from '../components/FixModal.vue'
+import AckBadge from '../components/AckBadge.vue'
+import { guardText, effectText, isAlternative } from '../texts'
+import HelpLink from '../components/HelpLink.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -140,13 +143,31 @@ function resetEffect(f) {
 }
 // nomi delle azioni (non di creazione) che un effetto può far eseguire all'entità
 const actionsOf = (eid) => [...new Set((entity(eid)?.transitions || []).filter((tr) => tr.kind !== 'create').map((tr) => tr.action))]
-const effectText = (f) =>
-  (f.kind === 'create' ? t('entity.effect.created') : f.kind === 'action' ? t('entity.effect.runs', { action: f.action }) : sname(f.to_state_id)) +
-  (f.skip_final ? ` ${t('entity.effect.activeOnly')}` : '')
+function setAlternative(i, on) {
+  const guards = draft.value.guards
+  const g = guards[i], prev = guards[i - 1]
+  if (on) {
+    prev.alt_group ||= Math.max(0, ...guards.map((x) => x.alt_group || 0)) + 1
+    g.alt_group = prev.alt_group
+  } else {
+    // si spezza il gruppo: da qui in poi le alternative ne formano uno nuovo
+    const old = g.alt_group
+    const next = Math.max(0, ...guards.map((x) => x.alt_group || 0)) + 1
+    for (let j = i; j < guards.length && guards[j].alt_group === old; j++) guards[j].alt_group = next
+    g.alt_group = guards[i + 1]?.alt_group === next ? next : 0
+  }
+}
+// un gruppo con una sola guardia non è un'alternativa
+function normalizeAlternatives(guards) {
+  const size = {}
+  for (const g of guards) if (g.alt_group) size[g.alt_group] = (size[g.alt_group] || 0) + 1
+  return guards.map((g) => ({ ...g, alt_group: size[g.alt_group] > 1 ? g.alt_group : 0 }))
+}
+
 async function saveTransition() {
   // azione, guardie ed effetti in una sola chiamata e una sola transazione: o si salva tutto o niente
   const d = draft.value
-  const body = { ...d, entity_id: e.value.id, kind: d.kind || 'normal' }
+  const body = { ...d, entity_id: e.value.id, kind: d.kind || 'normal', guards: normalizeAlternatives(d.guards) }
   await mutate(d.id ? api.put(`/transitions/${d.id}`, body) : api.post('/transitions', body))
   draft.value = null
   toast(t('entity.actionSaved'))
@@ -204,17 +225,23 @@ const incoming = computed(() => {
 const errors = ref([])
 const analyzing = ref(false)
 let analysisRun = 0
-watch(() => [m.value, e.value?.id], async ([, id], old) => {
+async function loadErrors() {
+  const id = e.value?.id
   if (!id) return
-  if (id !== old?.[1]) errors.value = [] // cambiando entità non restano gli errori di quella di prima
   const run = ++analysisRun
   analyzing.value = true
   try {
     const { issues } = await api.get(`/domains/${m.value.id}/analysis`)
-    if (run === analysisRun) errors.value = issues.filter((i) => i.severity === 'error' && i.entity_ids.includes(id))
+    // le accettate o rimandate non contano, a meno che il modello sia cambiato da allora
+    if (run === analysisRun)
+      errors.value = issues.filter((i) => i.severity === 'error' && i.entity_ids.includes(id) && (!i.ack || i.ack.stale))
   } finally {
     if (run === analysisRun) analyzing.value = false
   }
+}
+watch(() => [m.value, e.value?.id], ([, id], old) => {
+  if (id !== old?.[1]) errors.value = [] // cambiando entità non restano gli errori di quella di prima
+  loadErrors()
 }, { immediate: true })
 // transizioni mancanti: effetti a cascata di altre entità che qui non trovano una transizione
 const missing = computed(() => errors.value.filter((i) => i.category === 'missing_transition' && i.entity_id === e.value.id))
@@ -222,7 +249,7 @@ const sameGap = (a, b) => a.from === b.from && (a.action ? a.action.toLowerCase(
 // gli altri errori, una riga per caso: le istanze #1, #2 dello stesso caso si contano insieme
 const otherErrors = computed(() => {
   const rows = new Map()
-  const plain = (s) => (s || '').replace(/ #\d+/g, '')
+  const plain = plainTitle
   for (const i of errors.value) {
     if (i.category === 'missing_transition') continue
     // conflitto dovuto a una transizione mancante qui: è già nella lista sopra
@@ -260,12 +287,7 @@ function cell(stateId, action) {
   return evolutions.value.filter((tr) => tr.action === action && tr.from_states.includes(stateId))
 }
 
-const guardText = (g) =>
-  g.kind === 'rule'
-    ? g.description
-    : `${ename(g.entity_id)} ${g.negate ? '∉' : '∈'} {${g.state_ids.map(sname).join(', ')}}` +
-      (g.each_entity_id ? `, ${t('entity.eachText', { entity: ename(g.each_entity_id) })}` : '')
-// padri dell'entità nelle composizioni: una guardia può valere "per ogni padre" (ogni Modello ha almeno una Fase…)
+// padri dell'entità nelle composizioni: una guardia può valere "per ogni padre" (ogni Ordine ha almeno una Riga…)
 const parentsOf = (eid) =>
   m.value.relations.filter((r) => r.composition && r.target_id === eid && r.source_id !== eid).map((r) => entity(r.source_id)).filter(Boolean)
 function changeGuardEntity(g) {
@@ -395,6 +417,7 @@ function changeGuardEntity(g) {
                   <span class="tag bg-zinc-50 text-zinc-500 ring-zinc-200">{{ $t(`analysis.category.${x.category}`) }}</span>
                   <span class="text-sm font-medium text-zinc-900">{{ x.title }}</span>
                   <span v-if="x.count > 1" class="text-xs text-zinc-400 tabular-nums">×{{ x.count }}</span>
+                  <AckBadge :ack="x.issue.ack" />
                 </div>
                 <p v-if="x.text" class="text-xs text-zinc-500 mt-1">{{ x.text }}</p>
                 <p v-if="x.fix" class="text-xs text-indigo-700 mt-1 flex items-start gap-1.5">
@@ -422,7 +445,7 @@ function changeGuardEntity(g) {
               <p class="text-xs text-zinc-500">
                 {{ $t('entity.statesHint') }}
                 {{ $t(creatable ? 'entity.statesHintCreatable' : 'entity.statesHintInitial') }}
-                {{ $t('entity.statesHintGone') }}
+                {{ $t('entity.statesHintGone') }} <HelpLink topic="liveness" />
               </p>
             </div>
           </div>
@@ -533,10 +556,12 @@ function changeGuardEntity(g) {
               </div>
               <p v-if="t.description" class="text-xs text-zinc-500 mt-1.5">{{ t.description }}</p>
               <div v-if="t.guards.length || t.effects.length" class="mt-2 flex flex-wrap gap-1.5">
-                <span v-for="g in t.guards" :key="'g' + g.id" class="tag"
-                      :class="g.kind === 'rule' ? 'bg-sky-50 text-sky-700 ring-sky-200' : 'bg-zinc-100 text-zinc-700 ring-zinc-200'">
-                  <i class="fa-solid fa-fw text-[10px]" :class="g.kind === 'rule' ? 'fa-flag' : 'fa-lock'" />{{ guardText(g) }}
-                </span>
+                <template v-for="(g, gi) in t.guards" :key="'g' + g.id">
+                  <span v-if="isAlternative(t.guards, gi)" class="text-[11px] font-semibold text-zinc-400 self-center">{{ $t('entity.or') }}</span>
+                  <span class="tag" :class="g.kind === 'rule' ? 'bg-sky-50 text-sky-700 ring-sky-200' : 'bg-zinc-100 text-zinc-700 ring-zinc-200'">
+                    <i class="fa-solid fa-fw text-[10px]" :class="g.kind === 'rule' ? 'fa-flag' : 'fa-lock'" />{{ guardText(g) }}
+                  </span>
+                </template>
                 <span v-for="f in t.effects" :key="'f' + f.id" class="tag bg-amber-50 text-amber-800 ring-amber-200">
                   <i class="fa-solid fa-bolt fa-fw text-[11px]" />{{ ename(f.entity_id) }} → {{ effectText(f) }}
                 </span>
@@ -697,7 +722,7 @@ function changeGuardEntity(g) {
         <label class="flex items-start gap-2.5 rounded-xl ring-1 ring-zinc-200 p-3 cursor-pointer hover:bg-zinc-50 transition">
           <input type="checkbox" class="accent-indigo-600 mt-0.5" :checked="!!draft.cascade_only" @change="(ev) => (draft.cascade_only = ev.target.checked ? 1 : 0)" />
           <span>
-            <span class="text-sm font-medium flex items-center gap-1.5"><i class="fa-solid fa-arrows-turn-right text-amber-500" /> {{ $t('entity.cascadeOnly') }}</span>
+            <span class="text-sm font-medium flex items-center gap-1.5"><i class="fa-solid fa-arrows-turn-right text-amber-500" /> {{ $t('entity.cascadeOnly') }} <HelpLink topic="cascade" /></span>
             <span class="block text-xs text-zinc-500">{{ $t('entity.cascadeOnlyLong') }}</span>
           </span>
         </label>
@@ -706,7 +731,7 @@ function changeGuardEntity(g) {
         <div>
           <div class="flex items-center justify-between mb-2">
             <div>
-              <div class="text-sm font-semibold flex items-center gap-1.5"><i class="fa-solid fa-lock fa-fw text-[12px]" /> {{ $t('entity.guards') }}</div>
+              <div class="text-sm font-semibold flex items-center gap-1.5"><i class="fa-solid fa-lock fa-fw text-[12px]" /> {{ $t('entity.guards') }} <HelpLink topic="guards" /></div>
               <p class="text-xs text-zinc-500">{{ $t('entity.guardsHint') }}</p>
             </div>
             <div class="flex gap-1">
@@ -715,7 +740,19 @@ function changeGuardEntity(g) {
             </div>
           </div>
           <div class="space-y-2">
-            <div v-for="(g, i) in draft.guards" :key="i" class="rounded-xl ring-1 ring-zinc-200 p-3 bg-zinc-50/50">
+            <template v-for="(g, i) in draft.guards" :key="i">
+            <!-- tra due guardie di stato: valgono entrambe (E) oppure ne basta una (OPPURE) -->
+            <div v-if="i && g.kind === 'state' && draft.guards[i - 1].kind === 'state'" class="flex justify-center -my-1">
+              <div class="inline-flex rounded-md bg-zinc-100 p-0.5 text-[11px] font-semibold">
+                <button v-for="op in ['and', 'or']" :key="op" type="button" @click="setAlternative(i, op === 'or')"
+                        class="px-2 py-0.5 rounded transition cursor-pointer"
+                        :class="isAlternative(draft.guards, i) === (op === 'or') ? 'bg-white shadow-sm text-zinc-900' : 'text-zinc-400 hover:text-zinc-700'">
+                  {{ $t(`entity.${op}`) }}
+                </button>
+              </div>
+              <span class="ml-1.5 self-center"><HelpLink topic="guardsOr" /></span>
+            </div>
+            <div class="rounded-xl ring-1 ring-zinc-200 p-3 bg-zinc-50/50">
               <div v-if="g.kind === 'state'" class="space-y-2.5">
                 <div class="flex items-center gap-2">
                   <select v-model="g.entity_id" class="input !w-44 !py-1.5" @change="changeGuardEntity(g)">
@@ -736,6 +773,7 @@ function changeGuardEntity(g) {
                     <option v-for="p in parentsOf(g.entity_id)" :key="p.id" :value="p.id">{{ $t('entity.eachOption', { parent: p.name }) }}</option>
                   </select>
                   <span v-if="g.each_entity_id">{{ $t(g.negate ? 'entity.eachHintNot' : 'entity.eachHint', { parent: ename(g.each_entity_id), entity: ename(g.entity_id) }) }}</span>
+                  <HelpLink topic="guardsEach" />
                 </div>
               </div>
               <div v-else class="flex items-center gap-2">
@@ -744,6 +782,7 @@ function changeGuardEntity(g) {
                 <button type="button" class="icon-btn hover:!text-rose-600" @click="draft.guards.splice(i, 1)"><i class="fa-solid fa-xmark fa-fw text-[14px]" /></button>
               </div>
             </div>
+            </template>
             <p v-if="!draft.guards.length" class="text-xs text-zinc-400 italic">{{ $t('entity.noGuards') }}</p>
           </div>
         </div>
@@ -752,7 +791,7 @@ function changeGuardEntity(g) {
         <div>
           <div class="flex items-center justify-between mb-2">
             <div>
-              <div class="text-sm font-semibold flex items-center gap-1.5"><i class="fa-solid fa-bolt fa-fw text-[12px]" /> {{ $t('entity.effects') }}</div>
+              <div class="text-sm font-semibold flex items-center gap-1.5"><i class="fa-solid fa-bolt fa-fw text-[12px]" /> {{ $t('entity.effects') }} <HelpLink topic="effects" /></div>
               <p class="text-xs text-zinc-500">{{ $t('entity.effectsHint') }}</p>
             </div>
             <button type="button" class="btn-ghost !text-xs" :disabled="!others.length" @click="addEffect"><i class="fa-solid fa-plus fa-fw text-[12px]" /> {{ $t('entity.effect.add') }}</button>
@@ -777,7 +816,7 @@ function changeGuardEntity(g) {
               <label v-if="f.kind !== 'create'" class="flex items-center gap-1.5 text-xs text-zinc-600 whitespace-nowrap cursor-pointer"
                      :title="$t('entity.effect.skipFinalHint')">
                 <input type="checkbox" :checked="!!f.skip_final" class="accent-indigo-600" @change="(ev) => (f.skip_final = ev.target.checked ? 1 : 0)" />
-                {{ $t('entity.effect.skipFinal') }}
+                {{ $t('entity.effect.skipFinal') }} <HelpLink topic="skipFinal" />
               </label>
               <input v-model="f.description" class="input !py-1.5 flex-1" :placeholder="$t('common.notes').toLowerCase()" />
               <button type="button" class="icon-btn hover:!text-rose-600" @click="draft.effects.splice(i, 1)"><i class="fa-solid fa-xmark fa-fw text-[14px]" /></button>
@@ -793,7 +832,7 @@ function changeGuardEntity(g) {
 
     <RelationModal v-if="relationDraft" :relation="relationDraft.relation" :source-id="e.id" @close="relationDraft = null" />
     <!-- il modello aggiornato fa ripartire da solo il calcolo degli errori -->
-    <FixModal v-if="fixing" :issue="fixing" @close="fixing = null" />
+    <FixModal v-if="fixing" :issue="fixing" @close="fixing = null" @acked="loadErrors" />
   </div>
   <div v-else class="p-8 text-zinc-400">{{ $t('entity.notFound') }}</div>
 </template>

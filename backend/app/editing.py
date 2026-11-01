@@ -132,8 +132,12 @@ def save_transition(conn, data: dict, transition_id: int | None = None) -> int:
 
 # ---------------------------------------------------------------- soluzioni ("Risolvi")
 _DOMAIN_OF = {
+    "domains": "SELECT id AS domain_id FROM domains WHERE id=?",
     "entities": "SELECT domain_id FROM entities WHERE id=?",
     "relations": "SELECT domain_id FROM relations WHERE id=?",
+    "invariants": "SELECT domain_id FROM invariants WHERE id=?",
+    "scenarios": "SELECT domain_id FROM scenarios WHERE id=?",
+    "attributes": "SELECT e.domain_id FROM attributes a JOIN entities e ON e.id=a.entity_id WHERE a.id=?",
     "states": "SELECT e.domain_id FROM states s JOIN entities e ON e.id=s.entity_id WHERE s.id=?",
     "transitions": "SELECT e.domain_id FROM transitions t JOIN entities e ON e.id=t.entity_id WHERE t.id=?",
     "effects": "SELECT e.domain_id FROM effects f JOIN transitions t ON t.id=f.transition_id "
@@ -145,9 +149,22 @@ _UPDATABLE = {"effects", "guards", "states", "transitions", "relations"}
 _DELETABLE = {"effects", "guards"}
 
 
+def domain_of(conn, table: str, id_) -> int | None:
+    """Dominio di una riga di una tabella del modello."""
+    r = conn.execute(_DOMAIN_OF[table], (id_,)).fetchone() if table in _DOMAIN_OF else None
+    return r and r["domain_id"]
+
+
+def domain_of_payload(conn, payload: dict) -> int | None:
+    """Dominio di una riga ancora da creare, dal suo riferimento al padre."""
+    for key, table in (("domain_id", "domains"), ("entity_id", "entities"), ("transition_id", "transitions")):
+        if payload.get(key) is not None:
+            return domain_of(conn, table, payload[key])
+    return None
+
+
 def _check(conn, domain_id: int, table: str, id_) -> None:
-    r = conn.execute(_DOMAIN_OF[table], (id_,)).fetchone()
-    if not r or r["domain_id"] != domain_id:
+    if domain_of(conn, table, id_) != domain_id:
         raise ValueError(f"{table} {id_}")
 
 

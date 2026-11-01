@@ -44,7 +44,7 @@ def import_model(conn, m: dict, default_name: str = "") -> int:
                     "entity_id": E.get(g.get("entity_id")),
                     "state_ids": [S[x] for x in g.get("state_ids", []) if x in S],
                     "negate": g.get("negate", 0), "description": g.get("description", ""),
-                    "each_entity_id": E.get(g.get("each_entity_id"))})
+                    "each_entity_id": E.get(g.get("each_entity_id")), "alt_group": g.get("alt_group", 0)})
             for f in t.get("effects", []):
                 db.insert(conn, "effects", {
                     "transition_id": T[t["id"]], "entity_id": E[f["entity_id"]], "kind": f.get("kind", "state"), "action": f.get("action", ""), "skip_final": f.get("skip_final", 0),
@@ -64,6 +64,14 @@ def import_model(conn, m: dict, default_name: str = "") -> int:
             "severity": inv.get("severity", "error"),
             "rules": [{"entity_id": E[r["entity_id"]], "state_ids": [S[x] for x in r.get("state_ids", []) if x in S],
                        "negate": r.get("negate", 0)} for r in inv.get("rules", []) if r.get("entity_id") in E]})
+    for x in m.get("expectations", []):
+        db.insert(conn, "expectations", {
+            "domain_id": did, "name": x["name"], "description": x.get("description", ""),
+            "kind": x.get("kind", "goal"), "expect": x.get("expect", "possible"),
+            "rules": [{"entity_id": E[r["entity_id"]], "state_ids": [S[s] for s in r.get("state_ids", []) if s in S],
+                       "negate": r.get("negate", 0)} for r in x.get("rules", []) if r.get("entity_id") in E],
+            "trace": [{**s, "transition_id": T[s["transition_id"]], "entity_id": E.get(s.get("entity_id"))}
+                      for s in x.get("trace", []) if s.get("transition_id") in T]})
     for sc in m.get("scenarios", []):
         db.insert(conn, "scenarios", {
             "domain_id": did, "name": sc["name"], "description": sc.get("description", ""),
@@ -107,14 +115,17 @@ def export_markdown(m: dict, lang: str | None = None) -> str:
         if e["transitions"]:
             L += [f"### {t('md.actions')}", "", t("md.actions_header"), "|---|---|---|---|---|---|"]
             for tr in e["transitions"]:
-                gs = []
+                gs, prev_alt = [], 0
                 for g in tr["guards"]:
                     if g["kind"] == "rule":
                         gs.append(t("md.rule", text=g["description"]))
                     else:
                         op = "∉" if g["negate"] else "∈"
-                        gs.append(f"{en(g['entity_id'])} {op} {{{', '.join(sn(x) for x in g['state_ids'])}}}"
+                        alt = g.get("alt_group") or 0
+                        gs.append((f"{t('md.or')} " if alt and alt == prev_alt else "")
+                                  + f"{en(g['entity_id'])} {op} {{{', '.join(sn(x) for x in g['state_ids'])}}}"
                                   + (f" {t('md.each', entity=en(g['each_entity_id']))}" if g.get("each_entity_id") else ""))
+                        prev_alt = alt
                 fx = [f"{en(f['entity_id'])} → " + (t("md.created") if f.get("kind") == "create"
                                                    else t("md.runs", action=f.get("action")) if f.get("kind") == "action"
                                                    else sn(f["to_state_id"]))

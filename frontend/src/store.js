@@ -58,6 +58,16 @@ export async function mutate(promise) {
   return res
 }
 
+/** Testo di una segnalazione senza i numeri delle istanze dell'analisi ("Riga #2", "(istanza #2)"). */
+export const plainTitle = (s) => (s || '').replace(/ \((?:istanza|instance) #\d+\)/g, '').replace(/ #\d+/g, '')
+
+/** Annulla l'ultima modifica al modello del dominio (storico lato backend). */
+export async function undo(domainId) {
+  const res = await mutate(api.post(`/domains/${domainId}/undo`))
+  toast(res.undone ? t('history.undone', { label: res.undone }) : t('history.nothingToUndo'))
+  return res
+}
+
 /** Nuova entità: posizione e colore li decide il backend. */
 export async function createEntity(domainId) {
   return mutate(api.post('/entities', { domain_id: domainId, name: t('entity.defaultName') }))
@@ -68,7 +78,7 @@ export function entity(id) {
   const real = store.model?.entities.find((e) => e.id === id)
   const label = store.instanceLabels[id]
   if (!label) return real
-  // istanza simulata dall'analisi (es. "Lotto #2"): stessa entità di base, altro nome
+  // istanza simulata dall'analisi (es. "Riga #2"): stessa entità di base, altro nome
   const base = real || store.model?.entities.find((e) => e.id === label.base)
   return base && { ...base, id, name: label.name }
 }

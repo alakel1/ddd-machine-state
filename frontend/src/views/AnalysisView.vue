@@ -1,13 +1,15 @@
 <script setup>
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { store, api, entity, ename, NONE } from '../store'
+import { store, api, entity, ename, NONE, plainTitle } from '../store'
 import { SEVERITY, pal } from '../colors'
 import { locale } from '../i18n'
 import PageHeader from '../components/PageHeader.vue'
 import StateChip from '../components/StateChip.vue'
 import Trace from '../components/Trace.vue'
 import FixModal from '../components/FixModal.vue'
+import AckBadge from '../components/AckBadge.vue'
+import HelpLink from '../components/HelpLink.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -26,19 +28,58 @@ async function run() {
   loading.value = true
   try {
     res.value = await api.get(`/domains/${m.value.id}/analysis`)
-    // nomi delle istanze simulate (es. "Lotto #2"), usati da percorsi e chip
+    // nomi delle istanze simulate (es. "Riga #2"), usati da percorsi e chip
     store.instanceLabels = Object.fromEntries(Object.entries(res.value.labels || {}).map(([k, v]) => [Number(k), v]))
   } finally {
     loading.value = false
   }
 }
 
-const scoped = computed(() => (res.value?.issues || []).filter((i) => !focus.value || i.entity_ids.includes(focus.value)))
+// accettate o rimandate (e non da rivedere): fuori dai conteggi, visibili a richiesta
+const isClosed = (i) => !!i.ack && !i.ack.stale
+const showClosed = ref(false)
+const inFocus = computed(() => (res.value?.issues || []).filter((i) => !focus.value || i.entity_ids.includes(focus.value)))
+const closedCount = computed(() => inFocus.value.filter(isClosed).length)
+const scoped = computed(() => inFocus.value.filter((i) => isClosed(i) === showClosed.value))
 const categories = computed(() => [...new Set(scoped.value.map((i) => i.category))])
+const causeKey = ref(null) // elenco filtrato sulle segnalazioni di una causa
 const issues = computed(() =>
-  scoped.value.filter((i) => (sev.value === 'all' || i.severity === sev.value) && (cat.value === 'all' || i.category === cat.value)),
+  scoped.value.filter((i) => (sev.value === 'all' || i.severity === sev.value) && (cat.value === 'all' || i.category === cat.value)
+    && (!causeKey.value || i.cause.key === causeKey.value)),
 )
-const bySev = (s) => scoped.value.filter((i) => i.severity === s).length
+
+// ---------- per causa: segnalazioni con la stessa causa si risolvono insieme ----------
+const mode = ref(route.query.view === 'list' ? 'list' : 'causes')
+const SEV_ORDER = { error: 0, warning: 1, info: 2 }
+// per "Risolvi" sul gruppo: prima chi ha soluzioni pronte, poi la segnalazione più vicina alla causa
+const CAT_ORDER = ['missing_transition', 'effect_conflict', 'composition', 'invariants']
+const representative = (list) => [...list].sort((a, b) =>
+  (b.fixes.length > 0) - (a.fixes.length > 0) || ((CAT_ORDER.indexOf(a.category) + 9) % 9) - ((CAT_ORDER.indexOf(b.category) + 9) % 9))[0]
+const causes = computed(() => {
+  const groups = new Map()
+  for (const i of issues.value) {
+    const g = groups.get(i.cause.key) || groups.set(i.cause.key, { key: i.cause.key, title: i.cause.title, issues: [] }).get(i.cause.key)
+    g.issues.push(i)
+  }
+  return [...groups.values()]
+    .map((g) => {
+      const cats = {}
+      for (const i of g.issues) cats[i.category] = (cats[i.category] || 0) + 1
+      const severity = g.issues.reduce((s, i) => (SEV_ORDER[i.severity] < SEV_ORDER[s] ? i.severity : s), 'info')
+      const symptoms = [...new Set(g.issues.map((i) => plainTitle(i.title)))]
+      return { ...g, cats, severity, symptoms, fixIssue: representative(g.issues) }
+    })
+    // prima le cause risolvibili con un clic: i deadlock senza soluzione di solito ne sono una conseguenza
+    .sort((a, b) => SEV_ORDER[a.severity] - SEV_ORDER[b.severity]
+      || (b.fixIssue.fixes.length > 0) - (a.fixIssue.fixes.length > 0) || b.issues.length - a.issues.length)
+})
+function showCause(g) {
+  causeKey.value = g.key
+  mode.value = 'list'
+}
+// i contatori contano sempre le segnalazioni aperte
+const bySev = (s) => inFocus.value.filter((i) => i.severity === s && !isClosed(i)).length
+watch(closedCount, (n) => { if (!n) showClosed.value = false })
 
 onUnmounted(() => (store.instanceLabels = {}))
 
@@ -131,6 +172,21 @@ watch(locale, () => { run(); loadMatrix() })
     <div class="grid gap-8 2xl:grid-cols-[minmax(0,1fr)_minmax(0,0.9fr)]">
       <!-- ISSUE -->
       <section class="space-y-3 min-w-0">
+        <div class="flex items-center gap-3 flex-wrap">
+          <div class="inline-flex rounded-lg bg-zinc-100 p-0.5">
+            <button v-for="v in ['causes', 'list']" :key="v" @click="mode = v; causeKey = null"
+                    class="px-3 py-1 rounded-md text-xs transition cursor-pointer"
+                    :class="mode === v ? 'bg-white shadow-sm text-zinc-900 font-medium' : 'text-zinc-500 hover:text-zinc-800'">
+              <i class="fa-solid fa-fw text-[11px] mr-1" :class="v === 'causes' ? 'fa-sitemap' : 'fa-list'" />{{ $t(`analysis.view.${v}`) }}
+            </button>
+          </div>
+          <span class="text-xs text-zinc-500">{{ $t('analysis.view.summary', { issues: issues.length, causes: causes.length }) }}</span>
+          <HelpLink topic="analysis" />
+          <button v-if="causeKey" @click="causeKey = null"
+                  class="inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium ring-1 bg-indigo-50 text-indigo-700 ring-indigo-200 cursor-pointer">
+            {{ causes.find((g) => g.key === causeKey)?.title }} <i class="fa-solid fa-xmark text-[10px] opacity-60" />
+          </button>
+        </div>
         <div class="flex items-center gap-2 flex-wrap">
           <button v-if="focus" @click="clearFocus"
                   class="inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium ring-1 bg-indigo-50 text-indigo-700 ring-indigo-200 hover:ring-indigo-300 transition cursor-pointer">
@@ -142,6 +198,11 @@ watch(locale, () => { run(); loadMatrix() })
                   :class="cat === c ? 'bg-zinc-900 text-white ring-zinc-900' : 'bg-white text-zinc-600 ring-zinc-200 hover:ring-zinc-300'">
             {{ $t(c === 'all' ? 'analysis.allCategories' : `analysis.category.${c}`) }}
           </button>
+          <button v-if="closedCount || showClosed" @click="showClosed = !showClosed; cat = 'all'"
+                  class="ml-auto inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium ring-1 transition cursor-pointer"
+                  :class="showClosed ? 'bg-emerald-600 text-white ring-emerald-600' : 'bg-white text-zinc-600 ring-zinc-200 hover:ring-zinc-300'">
+            <i class="fa-solid fa-check-double text-[10px]" /> {{ showClosed ? $t('ack.hide') : $t('ack.show', { n: closedCount }) }}
+          </button>
         </div>
 
         <div v-if="res && !issues.length" class="card p-10 text-center">
@@ -149,6 +210,36 @@ watch(locale, () => { run(); loadMatrix() })
           <p class="mt-2 text-sm text-zinc-600">{{ $t('analysis.noIssues') }}</p>
         </div>
 
+        <!-- per causa: una card per causa, con i sintomi e un solo "Risolvi" -->
+        <template v-if="mode === 'causes'">
+          <article v-for="g in causes" :key="g.key" class="card p-5 relative overflow-hidden">
+            <div class="absolute left-0 inset-y-0 w-1" :class="SEVERITY[g.severity].dot" />
+            <div class="flex items-start gap-3">
+              <div class="flex-1 min-w-0">
+                <div class="flex items-center gap-2 flex-wrap">
+                  <span class="tag" :class="SEVERITY[g.severity].cls">{{ $t(`severity.${g.severity}`) }}</span>
+                  <span v-for="(n, c) in g.cats" :key="c" class="tag bg-zinc-50 text-zinc-500 ring-zinc-200">
+                    {{ $t(`analysis.category.${c}`) }}<template v-if="n > 1"> ×{{ n }}</template>
+                  </span>
+                </div>
+                <h3 class="mt-2 font-semibold tracking-tight text-zinc-900">{{ g.title }}</h3>
+                <ul v-if="g.symptoms.length > 1 || g.symptoms[0] !== g.title" class="mt-2 space-y-0.5 text-sm text-zinc-600">
+                  <li v-for="s in g.symptoms.slice(0, 4)" :key="s" class="flex gap-2">
+                    <i class="fa-solid fa-angle-right fa-fw text-[10px] text-zinc-300 mt-[6px] shrink-0" />{{ s }}
+                  </li>
+                </ul>
+                <button class="mt-2 text-xs text-indigo-600 hover:underline cursor-pointer" @click="showCause(g)">
+                  {{ $t('analysis.view.showIssues', g.issues.length) }}
+                </button>
+              </div>
+              <button class="shrink-0 !text-xs" :class="g.fixIssue.fixes.length ? 'btn-accent' : 'btn-outline'" @click="fixing = g.fixIssue">
+                <i class="fa-solid fa-wand-magic-sparkles fa-fw text-[12px]" /> {{ $t('fix.button') }}
+              </button>
+            </div>
+          </article>
+        </template>
+
+        <template v-else>
         <article v-for="(i, k) in issues" :key="k" class="card p-5 relative overflow-hidden">
           <div class="absolute left-0 inset-y-0 w-1" :class="SEVERITY[i.severity].dot" />
           <div class="flex items-start gap-3">
@@ -156,6 +247,7 @@ watch(locale, () => { run(); loadMatrix() })
               <div class="flex items-center gap-2 flex-wrap">
                 <span class="tag" :class="SEVERITY[i.severity].cls">{{ $t(`severity.${i.severity}`) }}</span>
                 <span class="tag bg-zinc-50 text-zinc-500 ring-zinc-200">{{ $t(`analysis.category.${i.category}`) }}</span>
+                <AckBadge :ack="i.ack" />
               </div>
               <h3 class="mt-2 font-semibold tracking-tight text-zinc-900">{{ i.title }}</h3>
               <p v-if="i.detail && !i.conflict" class="text-sm text-zinc-600 mt-0.5">{{ i.detail }}</p>
@@ -253,6 +345,7 @@ watch(locale, () => { run(); loadMatrix() })
             </button>
           </div>
         </article>
+        </template>
       </section>
 
       <!-- MATRICE -->
@@ -309,5 +402,5 @@ watch(locale, () => { run(); loadMatrix() })
       </section>
     </div>
   </div>
-  <FixModal v-if="fixing" :issue="fixing" @close="fixing = null" @applied="run(); loadMatrix()" />
+  <FixModal v-if="fixing" :issue="fixing" @close="fixing = null" @applied="run(); loadMatrix()" @acked="run()" />
 </template>
