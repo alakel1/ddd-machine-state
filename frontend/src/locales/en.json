@@ -389,7 +389,9 @@
       "oneToMany": "Each {a} has several {b}.",
       "manyToMany": "Several {a} are linked to several {b}."
     },
-    "livenessEdit": "edit in the entity page",
+    "livenessEdit": "add them in the entity page",
+    "livenessInline": "For each state, choose whether the entity is active, off (it can be turned back on) or deleted (for good): the change is saved right away.",
+    "noStates": "No states yet:",
     "livenessRule": "When the parent is turned off, its children cannot stay active; when it is deleted, they must disappear.",
     "states": {
       "title": "State diagram",

@@ -389,7 +389,9 @@
       "oneToMany": "Ogni {a} ha più {b}.",
       "manyToMany": "Più {a} sono legati a più {b}."
     },
-    "livenessEdit": "modifica nella scheda",
+    "livenessEdit": "aggiungili nella scheda",
+    "livenessInline": "Per ogni stato, scegli se l'entità è attiva, spenta (si riaccende) o eliminata (definitivo): la modifica si salva subito.",
+    "noStates": "Ancora nessuno stato:",
     "livenessRule": "Quando il padre si spegne, i figli non possono restare attivi; quando viene eliminato, devono sparire.",
     "states": {
       "title": "Diagramma degli stati",

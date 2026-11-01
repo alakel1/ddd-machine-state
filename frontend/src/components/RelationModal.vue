@@ -1,10 +1,9 @@
 <script setup>
 // Crea o modifica una relazione: usato dalla Panoramica e dalla scheda entità
 import { computed, ref } from 'vue'
-import { store, api, reloadModel, ename, entity, toast, goneStates, offStates } from '../store'
+import { store, api, reloadModel, ename, entity, toast } from '../store'
 import { t } from '../i18n'
 import Modal from './Modal.vue'
-import StateChip from './StateChip.vue'
 import HelpLink from './HelpLink.vue'
 
 // relation: relazione esistente da modificare, oppure null per una nuova (sourceId = padre proposto)
@@ -22,6 +21,12 @@ function draftOf() {
   return { source_id: source, target_id: target, cardinality: '1-N', label: '', composition: 0, instances: 1 }
 }
 const r = ref(draftOf())
+
+const LIVENESS = { active: 'bg-emerald-600 text-white', off: 'bg-amber-500 text-white', gone: 'bg-rose-600 text-white' }
+async function setLiveness(s, liveness) {
+  await api.put(`/states/${s.id}`, { liveness })
+  await reloadModel()
+}
 
 function swap() {
   ;[r.value.source_id, r.value.target_id] = [r.value.target_id, r.value.source_id]
@@ -79,17 +84,22 @@ async function save() {
           </span>
         </label>
         <template v-if="r.composition">
-          <!-- spento / eliminato si decidono sugli stati di ciascuna entità, qui si vedono soltanto -->
-          <div v-for="eid in [r.source_id, r.target_id]" :key="eid" class="text-xs space-y-1">
-            <div class="flex items-center gap-2">
-              <span class="font-medium text-zinc-700">{{ ename(eid) }}</span>
+          <!-- spento / eliminato si decidono sugli stati di ciascuna entità: si cambiano qui, senza lasciare la relazione -->
+          <p class="text-xs text-zinc-500">{{ $t('model.livenessInline') }}</p>
+          <div v-for="eid in [...new Set([r.source_id, r.target_id])]" :key="eid" class="text-xs space-y-1">
+            <div class="font-medium text-zinc-700">{{ ename(eid) }}</div>
+            <div v-for="s in entity(eid)?.states || []" :key="s.id" class="flex items-center gap-2 pl-3">
+              <span class="font-mono text-zinc-600 w-40 truncate">{{ s.name }}</span>
+              <div class="inline-flex rounded-md bg-white ring-1 ring-inset ring-zinc-200 p-px">
+                <button v-for="(cls, lv) in LIVENESS" :key="lv" type="button" @click="setLiveness(s, lv)"
+                        class="rounded px-1.5 py-px text-[11px] font-medium whitespace-nowrap transition cursor-pointer"
+                        :class="(s.liveness || 'active') === lv ? cls : 'text-zinc-400 hover:text-zinc-700'">{{ $t(`state.liveness.${lv}`) }}</button>
+              </div>
+            </div>
+            <p v-if="!entity(eid)?.states.length" class="pl-3 text-zinc-400">
+              {{ $t('model.noStates') }}
               <RouterLink :to="`/d/${m.id}/entity/${eid}`" class="text-indigo-600 hover:underline" @click="emit('close')">{{ $t('model.livenessEdit') }}</RouterLink>
-            </div>
-            <div v-for="[lv, ids] in [['off', offStates(entity(eid))], ['gone', goneStates(entity(eid))]]" :key="lv" class="flex flex-wrap items-center gap-1.5 pl-3">
-              <span class="text-zinc-500 w-20">{{ $t(`state.liveness.${lv}`) }}</span>
-              <StateChip v-for="sid in ids" :key="sid" :id="sid" :entity-id="eid" size="xs" />
-              <span v-if="!ids.length" class="text-zinc-400">—</span>
-            </div>
+            </p>
           </div>
           <p class="text-xs text-zinc-500">{{ $t('model.livenessRule', { parent: ename(r.source_id), child: ename(r.target_id) }) }}</p>
           <div class="flex items-center gap-3">
