@@ -10,9 +10,9 @@ from .relations import NONE, gone_states
 # ---------------------------------------------------------------- operazioni
 
 
-def op_add_transition(eid, src, dst, action):
+def op_add_transition(eid, src, dst, action, cascade_only=1, guards=()):
     return {"op": "add_transition", "entity_id": eid, "from_state_id": src, "to_state_id": dst,
-            "action": action, "cascade_only": 1}
+            "action": action, "cascade_only": cascade_only, "guards": list(guards)}
 
 
 def op_add_effect(tid, eid, dst):
@@ -204,6 +204,52 @@ def _local_fixes(x: _Ctx, issue):
     return []
 
 
+def _deadlock_fixes(x: _Ctx, issue, base, tbase):
+    """Dal motivo del deadlock: l'azione che ha fermato l'altra entità porta anche questa in uno stato finale;
+    oppure si toglie la guardia che blocca l'uscita; oppure lo stato in cui resta ferma diventa finale."""
+    e = x.e
+    w = (issue.get("deadlock") or {}).get("why")
+    if not w:
+        return []
+    # un'uscita si blocca per una cascata: prima le soluzioni di quel conflitto
+    out = _conflict_fixes(x, {"conflict": w["conflict"]}, base, tbase) if w.get("conflict") else []
+    if w["kind"] == "cascade":
+        return out
+    eid, sid = base(w["entity_id"]), w["state_id"]
+    s = e.state.get(sid)
+    if eid not in e.entity or not s:
+        return out
+    p = {"entity": e.ename(eid), "state": s["name"]}
+    exits = {t["to_state_id"]: t for t in e.outgoing(eid, sid)}
+    finals = [st["id"] for st in e.entity[eid]["states"] if st["is_final"]]
+    blocker = base(w["blocker"]) if w.get("blocker") is not None else None
+    if blocker in e.entity and w.get("bstate") not in (None, NONE) and finals:
+        # un'uscita apposta per questa situazione: da {state} a uno stato finale quando l'altra entità è dove si è fermata
+        dst = next((d for d in finals if d in exits), finals[0])
+        name = x.name_for(eid, dst, e.sname(dst).lower())
+        out.append(x.fix("deadlock_exit", [op_add_transition(eid, sid, dst, name, cascade_only=0, guards=[
+            {"entity_id": blocker, "state_ids": [w["bstate"]]}])], dst=e.sname(dst), name=name,
+            blocker=e.ename(blocker), bstate=e.sname(w["bstate"]), **p))
+    by = e.transition.get(tbase(w["by"])) if w.get("kind") == "by" and w.get("by") else None
+    if by and not any(f["entity_id"] == eid for f in by["effects"]):
+        # uno stato finale raggiungibile senza guardie; se la sola transizione verso lì ha guardie, l'effetto
+        # verrebbe bloccato come l'azione: meglio non proporlo
+        dst = next((d for d in finals if d in exits and not exits[d]["guards"]), None) \
+            or next((d for d in finals if d not in exits), None)
+        if dst is not None:
+            ops = [op_add_effect(by["id"], eid, dst)]
+            if dst not in exits:
+                ops.insert(0, op_add_transition(eid, sid, dst, x.name_for(eid, dst, by["action"])))
+            out.append(x.fix("deadlock_effect", ops, by=by["action"], owner=e.ename(by["entity_id"]), dst=e.sname(dst), **p))
+    if w.get("guard_id") in x.guards:
+        owner, g = x.guards[w["guard_id"]]
+        out.append(x.fix("delete_guard", [op_delete("guards", g["id"])], action=owner["action"],
+                         entity=e.ename(g["entity_id"]), required=x.states(g["state_ids"]), states=""))
+    if w.get("kind") in ("guard", "no_exit") and not s["is_final"]:
+        out.append(x.fix("mark_final", [op_update("states", sid, is_final=1)], **p))
+    return out
+
+
 def fixes_for(engine, issue, inv=None, base=lambda x: x, tbase=lambda x: x) -> list[dict]:
     x = getattr(engine, "_fix_ctx", None)
     if x is None:
@@ -213,6 +259,8 @@ def fixes_for(engine, issue, inv=None, base=lambda x: x, tbase=lambda x: x) -> l
         return _conflict_fixes(x, issue, base, tbase)
     if cat == "missing_transition":
         return _missing_fixes(x, issue)
+    if cat == "deadlock":
+        return _deadlock_fixes(x, issue, base, tbase)
     if issue.get("code") == "a.violable":
         return _invariant_fixes(x, issue, inv, tbase)
     return _local_fixes(x, issue)

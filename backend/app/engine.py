@@ -724,7 +724,7 @@ class Engine:
         blocca. La causa è la prima guardia che non passa: nel deadlock nessuna entità si muove, quindi chi la fa fallire
         resta dov'è per sempre; l'ultima azione del percorso che l'ha portato lì è quella da correggere."""
         T, q = self.t, lambda x: self.t("q", x=x)
-        stuck, cause = [], None
+        stuck, cause, blocked = [], None, None
         for eid, sid in state.items():
             if self.is_final(sid) or sid in self.resting:
                 continue
@@ -741,13 +741,18 @@ class Engine:
                         if f and cause is None:
                             cause = (eid, sid, t, g)
                     if not reasons:
-                        reasons = [c["message"] for c in self.fire(t, state)[2]]
+                        conf = self.fire(t, state)[2]
+                        reasons = [c["message"] for c in conf]
+                        if conf and blocked is None:
+                            blocked = (eid, sid, conf[0])
                 exits.append({"transition_id": t.get("base_id", t["id"]), "action": t["action"], "to": t["to_state_id"],
                               "reasons": reasons})
             stuck.append({"entity_id": eid, "state": sid, "exits": exits})
 
         first = stuck[0]
         p = {"entity": self.ename(first["entity_id"]), "state": self.sname(first["state"])}
+        # why: la causa per id (del modello espanso), da cui partono soluzioni e raggruppamento per causa
+        why = {"kind": "generic", "entity_id": first["entity_id"], "state_id": first["state"]}
         if cause:
             eid, sid, t, g = cause
             p = {"entity": self.ename(eid), "state": self.sname(sid), "action": t["action"]}
@@ -757,18 +762,32 @@ class Engine:
             by = next((s for s in reversed(trace) if s["entity_id"] == blocker and s["to"] == bstate), None)
             p.update(guard=self._guard_text(g), blocker=self.ename(blocker), bstate=self.sname(bstate))
             detail = T("a.deadlock.needs", **p) + " " + T("a.deadlock.blocker_final" if self.is_final(bstate) else "a.deadlock.blocker_stuck", **p)
+            why = {"kind": "by" if by else "guard", "entity_id": eid, "state_id": sid,
+                   "transition_id": t.get("base_id", t["id"]), "guard_id": g.get("id"), "blocker": blocker,
+                   "bstate": bstate, "by": by and by["transition_id"]}
             if by:
                 detail += T("a.deadlock.by", by=by["action"], **p)
                 fix = ("fix.deadlock_effect", blocker, {**p, "by": by["action"]})
             else:
                 detail += "."
                 fix = ("fix.deadlock_guard", eid, p)
+        elif blocked:
+            # nessuna guardia ferma le uscite, ma la loro cascata si blocca: la causa è quella della cascata bloccata
+            eid, sid, c = blocked
+            detail, fix = T("a.deadlock.generic", **p), None
+            why = {"kind": "cascade", "entity_id": eid, "state_id": sid, "conflict": c}
         elif not first["exits"]:
             detail, fix = T("a.deadlock.no_exit", **p), ("fix.deadlock_final", first["entity_id"], p)
+            why["kind"] = "no_exit"
         else:
             detail, fix = T("a.deadlock.generic", **p), None
-        return {"stuck": stuck, "detail": detail,
-                "fix": fix and {"text": T(fix[0], **fix[2]), "entity_id": fix[1]}}
+        if blocked:
+            # un'uscita la cui cascata si blocca è un errore del modello (le guardie che non passano di solito no):
+            # causa e soluzioni partono da lì
+            why["conflict"] = blocked[2]
+            fix = None
+        hint = {"text": T(fix[0], **fix[2]), "entity_id": fix[1]} if fix else blocked and blocked[2].get("fix")
+        return {"stuck": stuck, "detail": detail, "why": why, "fix": hint and dict(hint)}
 
     def _broken(self, ref: dict) -> bool:
         """Guardia o condizione che cita uno stato eliminato dal modello (o di un'altra entità)."""
@@ -1035,6 +1054,25 @@ class Engine:
                 return {"key": f"relation:{rel_id}",
                         "title": T("c.relation", parent=self.ename(r["source_id"]), child=self.ename(r["target_id"]))}
         if i["category"] == "deadlock":
+            # deadlock con la stessa causa (la stessa azione che lascia l'entità bloccata, la stessa guardia, lo stesso
+            # stato senza uscita) si risolvono insieme
+            w = (i.get("deadlock") or {}).get("why") or {}
+            if w.get("conflict"):
+                c = self._cause({"category": "effect_conflict", "conflict": w["conflict"], "fingerprint": "", "title": ""},
+                                None, base, tbase)
+                if not c["key"].startswith("self:"):
+                    return c
+            eid, sid = base(w["entity_id"]), w["state_id"]
+            by = self.transition.get(tbase(w["by"])) if w.get("kind") == "by" and w.get("by") else None
+            owner = self.transition.get(w.get("transition_id"))
+            p = {"entity": self.ename(eid), "state": self.sname(sid)}
+            if by:
+                return {"key": f"deadlock:by:{by['id']}:{eid}:{sid}",
+                        "title": T("c.deadlock_by", by=by["action"], owner=self.ename(by["entity_id"]), **p)}
+            if w.get("kind") == "guard" and owner and w.get("guard_id") is not None:
+                return {"key": f"deadlock:guard:{w['guard_id']}", "title": T("c.deadlock_guard", action=owner["action"], **p)}
+            if w.get("kind") == "no_exit":
+                return {"key": f"deadlock:exit:{sid}", "title": T("c.deadlock_exit", **p)}
             return {"key": "deadlock", "title": T("c.deadlock")}
         if inv is not None:
             return {"key": f"invariant:{inv['id']}", "title": i["title"].split(" (")[0]}

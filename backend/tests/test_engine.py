@@ -46,6 +46,23 @@ def test_guards_see_the_state_updated_by_the_cascade(model):
     assert eng.apply(eng.initial_state(), confirm)["ok"] is False
 
 
+def test_deadlock_names_its_cause_and_offers_a_way_out(model):
+    model.entity("Order", ["NEW", "OPEN", "DONE"], initial="NEW", final=["DONE"])
+    model.entity("Shipment", ["NEW", "DELIVERED", "LOST"], initial="NEW", final=["DELIVERED", "LOST"])
+    model.transition("Order", "NEW", "OPEN", "confirm")  # lo stato iniziale non conta come bloccato
+    model.transition("Shipment", "NEW", "DELIVERED", "deliver")
+    lose = model.transition("Shipment", "NEW", "LOST", "lose")
+    model.transition("Order", "OPEN", "DONE", "close",
+                     guards=[{"entity_id": model.eid("Shipment"), "state_ids": [model.s("Shipment", "DELIVERED")]}])
+    eng = Engine(model.m, "en")
+    dl = next(i for i in eng.analyze()["issues"] if i["category"] == "deadlock")
+    assert dl["cause"]["key"] == f"deadlock:by:{lose}:{model.eid('Order')}:{model.s('Order', 'OPEN')}"
+    way_out = next(f for f in dl["fixes"] if f["key"] == "deadlock_exit")
+    op = way_out["ops"][0]
+    assert (op["from_state_id"], op["to_state_id"], op["cascade_only"]) == (model.s("Order", "OPEN"), model.s("Order", "DONE"), 0)
+    assert op["guards"] == [{"entity_id": model.eid("Shipment"), "state_ids": [model.s("Shipment", "LOST")]}]
+
+
 def _checkout_model(model):
     """Carrello → Ordine → Riga: confermare il carrello richiede che ogni ordine abbia una riga."""
     model.entity("Cart", ["OPEN", "CHECKED_OUT"], initial="OPEN", final=["CHECKED_OUT"])

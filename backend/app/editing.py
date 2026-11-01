@@ -174,9 +174,14 @@ def apply_ops(conn, domain_id: int, ops: list[dict]) -> None:
         kind = op.get("op")
         if kind == "add_transition":
             _check(conn, domain_id, "entities", op["entity_id"])
+            guards = op.get("guards") or []
+            for g in guards:
+                _check(conn, domain_id, "entities", g["entity_id"])
             save_transition(conn, {"entity_id": op["entity_id"], "kind": "normal", "from_state_id": op["from_state_id"],
                                    "to_state_id": op["to_state_id"], "action": op["action"],
-                                   "cascade_only": op.get("cascade_only", 1), "guards": [], "effects": []})
+                                   "cascade_only": op.get("cascade_only", 1), "effects": [],
+                                   "guards": [{"kind": "state", "entity_id": g["entity_id"], "state_ids": list(g["state_ids"]),
+                                               "negate": int(bool(g.get("negate"))), "description": ""} for g in guards]})
         elif kind == "add_effect":
             _check(conn, domain_id, "transitions", op["transition_id"])
             _check(conn, domain_id, "entities", op["entity_id"])

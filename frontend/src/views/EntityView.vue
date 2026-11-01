@@ -254,14 +254,14 @@ const otherErrors = computed(() => {
     if (i.category === 'missing_transition') continue
     // conflitto dovuto a una transizione mancante qui: è già nella lista sopra
     if (i.conflict?.gap && missing.value.some((x) => sameGap(x.gap, i.conflict.gap))) continue
-    const text = i.category === 'deadlock' ? '' : plain(i.conflict ? `${i.conflict.what}, ${i.conflict.reason}` : i.detail)
+    const text = plain(i.conflict ? `${i.conflict.what}, ${i.conflict.reason}` : i.detail)
     const key = `${i.category}|${plain(i.title)}|${text}`
     const row = rows.get(key)
     if (row) {
       row.count++
       if (!row.issue.fixes?.length && i.fixes?.length) row.issue = i // per "Risolvi": il caso con soluzioni pronte
     } else rows.set(key, { key, category: i.category, title: plain(i.title), text, count: 1, issue: i,
-      fix: i.conflict?.fix && { ...i.conflict.fix, text: plain(i.conflict.fix.text) } })
+      fix: (i.conflict?.fix || i.deadlock?.fix) && { ...(i.conflict?.fix || i.deadlock.fix), text: plain((i.conflict?.fix || i.deadlock.fix).text) } })
   }
   return [...rows.values()]
 })
