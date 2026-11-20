@@ -10,7 +10,9 @@ ognuna con le proprie guardie, effetti e attore. Le entità senza azioni di
 creazione partono, come prima, dal loro stato iniziale.
 """
 import hashlib
+import itertools
 import json
+import math
 import threading
 from collections import OrderedDict, deque
 from operator import itemgetter
@@ -25,6 +27,8 @@ DEFAULT_EXPLORE_LIMIT = 1_000_000
 _EXPLORE_CACHE: "OrderedDict[tuple, dict]" = OrderedDict()  # esplorazioni recenti, per modello e limite
 _EXPLORE_CACHE_SIZE = 4  # un'esplorazione grande (centinaia di migliaia di stati) occupa centinaia di MB
 _EXPLORE_LOCK = threading.Lock()  # richieste parallele sullo stesso modello aspettano il primo calcolo
+# riduzione per simmetria delle istanze multiple (vedi Engine._symmetry); False = BFS su tutti gli stati concreti
+SYMMETRY = True
 
 
 def is_create(t: dict) -> bool:
@@ -88,6 +92,161 @@ class Engine:
                     copies = [x for x in (_vid(r["source_id"], j) for j in range(1, 4)) if x in self.entity]
                     same = _vid(r["source_id"], i)
                     self.parents.setdefault(eid, []).extend([same] if same in copies and len(copies) > 1 else copies)
+        self._by_base = {(t["entity_id"], t.get("base_id", t["id"])): t for t in self.transitions}
+        self._sym = self._symmetry() if SYMMETRY and any(e < 0 for e in self.order) else None
+
+    # ---------- simmetria delle istanze multiple ----------
+    # Le copie #1..#k di un figlio sono intercambiabili: i riferimenti tra copie si accoppiano per indice, quindi
+    # permutare gli indici su tutte le entità duplicate insieme dà lo stesso modello. L'esplorazione allora tiene
+    # un solo stato per orbita (forma canonica: colonne delle copie ordinate) e ricostruisce dopo, per permutazione,
+    # gli stati, i percorsi e le segnalazioni delle altre istanze.
+    def _symmetry(self) -> list | None:
+        """Blocchi di indici di copia permutabili, [{"idx", "cols", "bases"}] (cols: per ogni indice, le posizioni
+        nella chiave di stato delle copie di quell'indice). Gli indici si dividono dove cambia il numero di copie
+        (con figli da 2 e da 3, l'indice 3 resta fermo). Ogni scambio di due indici vicini si verifica sul modello
+        espanso: un blocco che non resta identico non si riduce."""
+        count = {}
+        for eid in self.order:
+            if eid < 0:
+                b, i = -eid // 10, -eid % 10
+                count[b] = max(count.get(b, 1), i)
+        pos = {eid: p for p, eid in enumerate(self.order)}
+        same = self._model_sig({})
+        blocks, lo = [], 0
+        for hi in sorted(set(count.values())):
+            idx, lo = list(range(lo + 1, hi + 1)), hi
+            bases = sorted(b for b, c in count.items() if c >= hi)
+            if len(idx) < 2:
+                continue
+            swap = lambda i, j: {_vid(b, a): _vid(b, c) for b in bases for a, c in ((i, j), (j, i))}
+            if all(self._model_sig(swap(i, i + 1)) == same for i in idx[:-1]):
+                blocks.append({"idx": idx, "bases": bases, "cols": [[pos[_vid(b, i)] for b in bases] for i in idx]})
+        return blocks or None
+
+    def _model_sig(self, phi: dict):
+        """Il modello espanso visto attraverso la mappa di entità phi, in forma confrontabile. Guardie su "tutte le
+        istanze" e "per ogni padre" sono insiemi; gli effetti di un'azione restano in ordine (la cascata è
+        sequenziale) salvo che le loro cascate non si tocchino a vicenda (_commuting)."""
+        m = lambda x: phi.get(x, x)
+
+        def guard(g):
+            if g["kind"] != "state":
+                return ("rule", g.get("description", ""))
+            many, each = g.get("entity_ids") or (), g.get("each") or ()
+            return ("state", None if (many or each) else m(g["entity_id"]), tuple(sorted(m(x) for x in many)),
+                    tuple(sorted(g["state_ids"])), bool(g["negate"]), g.get("alt_group") or 0,
+                    tuple(sorted(((m(p), tuple(sorted(gone)), tuple(sorted(m(k) for k in kids))) for p, gone, kids in each), key=repr)))
+
+        def effects(t):
+            fx = [(m(f["entity_id"]), f.get("kind") or "state", f.get("to_state_id"), (f.get("action") or "").strip().lower(),
+                   bool(f.get("skip_final"))) for f in t["effects"]]
+            return self._effects_normal_form(fx)
+
+        ts = sorted(((m(t["entity_id"]), t.get("base_id", t["id"]), t.get("kind"), bool(t.get("cascade_only")),
+                      t["from_state_id"], t["to_state_id"], tuple(sorted(map(guard, t["guards"]), key=repr)), effects(t))
+                     for t in self.transitions), key=repr)
+        rule = lambda r: (None if r.get("entity_ids") else m(r["entity_id"]), tuple(sorted(m(x) for x in r.get("entity_ids") or ())),
+                          tuple(sorted(r.get("state_ids", []))), bool(r.get("negate")))
+        invs = sorted(((str(inv["id"]).split("#")[0], tuple(sorted(map(rule, inv["rules"]), key=repr)))
+                       for inv in self.invariants), key=repr)
+        return ts, invs
+
+    def _effect_targets(self, f: dict) -> list:
+        """Le azioni del bersaglio che un effetto può far scattare (come le sceglie fire)."""
+        ts = self.entity[f["entity_id"]]["transitions"]
+        kind = f.get("kind") or "state"
+        if kind == "create":
+            return [x for x in ts if is_create(x)]
+        if kind == "action":
+            name = (f.get("action") or "").strip().lower()
+            return [x for x in ts if not is_create(x) and x["action"].strip().lower() == name]
+        return [x for x in ts if not is_create(x) and x["to_state_id"] == f.get("to_state_id")]
+
+    def _effect_footprint(self, f: dict) -> tuple[set, set]:
+        """(scritture, letture) di un effetto con tutta la sua cascata: le entità che può cambiare e quelle il cui
+        stato può influire sull'esito (le proprie e quelle delle guardie delle azioni che può far scattare)."""
+        fp = self.__dict__.setdefault("_fp", {})
+        key = (f["entity_id"], f.get("kind") or "state", f.get("to_state_id"), (f.get("action") or "").strip().lower())
+        if key not in fp:
+            w, r, seen, stack = set(), set(), set(), [f]
+            while stack:
+                e = stack.pop()
+                k = (e["entity_id"], e.get("kind") or "state", e.get("to_state_id"), (e.get("action") or "").strip().lower())
+                if k in seen:
+                    continue
+                seen.add(k)
+                w.add(e["entity_id"])
+                r.add(e["entity_id"])
+                for x in self._effect_targets(e):
+                    for g in x["guards"]:
+                        if g["kind"] == "state" and g.get("entity_id") is not None:
+                            r.update((g["entity_id"], *(g.get("entity_ids") or ())))
+                            for pid, _, kids in g.get("each") or ():
+                                r.update((pid, *kids))
+                    stack.extend(x["effects"])
+            fp[key] = (w, r)
+        return fp[key]
+
+    def _effects_normal_form(self, fx: list[tuple]) -> tuple:
+        """Forma normale di una sequenza di effetti (entità, tipo, stato, azione, ignora_finali): due effetti le cui
+        cascate non si toccano (nessuno scrive ciò che l'altro legge o scrive) si possono scambiare senza cambiare
+        l'esito, quindi sequenze uguali a meno di questi scambi hanno la stessa forma: ordinamento topologico delle
+        dipendenze che sceglie ogni volta il primo effetto libero in ordine lessicografico."""
+        fps = [self._effect_footprint({"entity_id": e, "kind": k, "to_state_id": to, "action": a}) for e, k, to, a, _ in fx]
+        dep = lambda i, j: bool(fps[i][0] & (fps[j][0] | fps[j][1]) or fps[j][0] & fps[i][1])
+        rest, out = list(range(len(fx))), []
+        while rest:
+            free = [i for n, i in enumerate(rest) if not any(dep(j, i) for j in rest[:n])]
+            pick = min(free, key=lambda i: repr(fx[i]))
+            out.append(fx[pick])
+            rest.remove(pick)
+        return tuple(out)
+
+    def _canon(self, k: tuple, with_perm: bool = False):
+        """Forma canonica della chiave di stato: in ogni blocco le colonne delle copie in ordine crescente.
+        Con with_perm ritorna anche la mappa di entità canonica → k (la copia che finisce al posto j)."""
+        out, perm = None, {}
+        for blk in self._sym:
+            cols = [tuple(k[p] for p in c) for c in blk["cols"]]
+            order = sorted(range(len(cols)), key=cols.__getitem__)
+            if order == list(range(len(cols))):
+                continue
+            out = out or list(k)
+            for j, o in enumerate(order):
+                for p, v in zip(blk["cols"][j], cols[o]):
+                    out[p] = v
+                if with_perm and o != j:
+                    for b in blk["bases"]:
+                        perm[_vid(b, blk["idx"][j])] = _vid(b, blk["idx"][o])
+        ck = tuple(out) if out else k
+        return (ck, perm) if with_perm else ck
+
+    def _orbit_size(self, k: tuple) -> int:
+        """Quanti stati concreti rappresenta la chiave canonica k (permutazioni distinte delle sue colonne)."""
+        n = 1
+        for blk in self._sym:
+            cols = [tuple(k[p] for p in c) for c in blk["cols"]]
+            n *= math.factorial(len(cols))
+            for c in set(cols):
+                n //= math.factorial(cols.count(c))
+        return n
+
+    def _group(self) -> list[dict]:
+        """Tutte le permutazioni del gruppo di simmetria tranne l'identità, come mappe di entità."""
+        out = [{}]
+        for blk in self._sym:
+            out = [{**g, **{_vid(b, i): _vid(b, j) for b in blk["bases"] for i, j in zip(blk["idx"], p) if i != j}}
+                   for g in out for p in itertools.permutations(blk["idx"])]
+        return [g for g in out if g]
+
+    def _apply_perm(self, phi: dict, k: tuple) -> tuple:
+        """Lo stato in cui l'entità phi(e) ha lo stato che e ha in k."""
+        st = self.from_key(k)
+        return self.key({phi.get(e, e): s for e, s in st.items()})
+
+    def _map_transition(self, phi: dict, tid: int) -> int:
+        t = self.transition[tid]
+        return self._by_base[(phi.get(t["entity_id"], t["entity_id"]), t.get("base_id", t["id"]))]["id"]
 
     def stuck_ids(self, state: dict) -> list:
         """Entità che dovrebbero ancora muoversi: non in uno stato finale o di riposo, e non "congelate" da un padre
@@ -144,7 +303,8 @@ class Engine:
                 continue
             if v == NONE and k in self.creatable:
                 st[k] = NONE
-            elif v in self.state and self.state[v]["entity_id"] == k:
+            # le copie di un'istanza multipla (id negativi) usano gli stati dell'entità di base
+            elif v in self.state and self.state[v]["entity_id"] == (-k // 10 if k < 0 else k):
                 st[k] = v
         return st
 
@@ -559,7 +719,7 @@ class Engine:
     def explore(self, start: dict | None = None, limit: int = DEFAULT_EXPLORE_LIMIT) -> dict:
         # l'esplorazione è il calcolo costoso: analisi e matrice la condividono finché il modello non cambia
         key = (hashlib.sha1(json.dumps(self.model, sort_keys=True, default=str).encode()).hexdigest(),
-               json.dumps(start, sort_keys=True), limit, self.t.lang)
+               json.dumps(start, sort_keys=True), limit, self.t.lang, self._sym is not None)
         with _EXPLORE_LOCK:
             if key in _EXPLORE_CACHE:
                 _EXPLORE_CACHE.move_to_end(key)
@@ -592,6 +752,10 @@ class Engine:
     def _explore(self, start: dict | None, limit: int) -> dict:
         start = self.normalize(start) if start else self.initial_state()
         k0 = self.key(start)
+        # con la simmetria si esplora un rappresentante per orbita; serve uno stato di partenza simmetrico
+        # (quello iniziale lo è: le copie partono tutte dallo stesso stato)
+        sym = self._sym if self._sym and self._canon(k0) == k0 else None
+        concrete = self._orbit_size(k0) if sym else 1  # stati concreti rappresentati
         parent = {k0: None}
         queue = deque([k0])
         enabled_ever = set()
@@ -657,13 +821,14 @@ class Engine:
                                                                            "key": k, "conflict": c, "steps": steps})
                         continue
                     moves += 1
-                    nk = self.key(new)
+                    nk = self._canon(self.key(new)) if sym else self.key(new)
                     if nk not in parent:
                         if len(parent) >= limit:
                             truncated = True
                             continue
                         parent[nk] = (k, t["id"])
                         queue.append(nk)
+                        concrete += self._orbit_size(nk) if sym else 1
                         # le invarianti valide in k restano valide se la mossa non tocca le loro entità
                         touched = set()
                         for p, (a, b) in enumerate(zip(k, nk)):
@@ -675,11 +840,60 @@ class Engine:
                 if len(deadlocks) < 25:
                     deadlocks.append(k)
 
-        trace = lambda key: self._trace(parent, key)
+        if sym:
+            # le altre istanze: quello che vale per uno stato vale, permutato, per tutta la sua orbita, alla stessa
+            # distanza dall'inizio. Si scorre in ordine di scoperta, così ogni segnalazione resta alla distanza minima
+            group = self._group()
+            enabled_ever |= {self._map_transition(g, x) for g in group for x in list(enabled_ever)}
+
+            def depth(k):
+                n = 0
+                while parent[k] is not None:
+                    k, n = parent[k][0], n + 1
+                return n
+
+            # per ogni invariante, la violazione più vicina all'inizio tra tutte le immagini di quelle trovate
+            best = {}
+            for v in list(violations.values()):
+                d = depth(v["key"])
+                for g in [{}, *group]:
+                    k2 = self._apply_perm(g, v["key"])
+                    for inv, rules in inv_key:
+                        if all(all((k2[p] in ids) != neg for p in positions) for positions, ids, neg in rules):
+                            if inv["id"] not in best or d < best[inv["id"]][0]:
+                                best[inv["id"]] = (d, k2, inv)
+            violations = {i: {"id": i, "name": inv["name"], "severity": inv["severity"], "description": inv["description"],
+                              "key": k2} for i, (d, k2, inv) in sorted(best.items(), key=lambda x: x[1][0])}
+            # conflitti: lo stesso, rifacendo l'azione permutata sullo stato permutato (i messaggi citano le istanze)
+            found, fired = {}, set()
+            for c in list(conflicts.values()):
+                d = depth(c["key"])
+                for g in [{}, *group]:
+                    k2, t2 = self._apply_perm(g, c["key"]), self.transition[self._map_transition(g, c["transition_id"])]
+                    if (k2, t2["id"]) in fired:
+                        continue
+                    fired.add((k2, t2["id"]))
+                    _, steps, conf = self.fire(t2, self.from_key(k2))
+                    for x in conf:
+                        ck = (t2["id"], x["message"])
+                        if ck not in found or d < found[ck][0]:
+                            found[ck] = (d, {"transition_id": t2["id"], "message": x["message"], "key": k2,
+                                             "conflict": x, "steps": steps})
+            conflicts = {ck: c for ck, (d, c) in sorted(found.items(), key=lambda x: x[1][0])}
+            for k in list(deadlocks):
+                for g in group:
+                    k2 = self._apply_perm(g, k)
+                    if len(deadlocks) < 25 and k2 not in deadlocks:
+                        deadlocks.append(k2)
+
+        trace = lambda key: self._trace(parent, key, bool(sym))
         return {
             "start": start,
-            # in ordine di scoperta (BFS): il primo stato che soddisfa una condizione ha il percorso più breve
+            # in ordine di scoperta (BFS): il primo stato che soddisfa una condizione ha il percorso più breve.
+            # Con la simmetria sono i rappresentanti delle orbite: proprietà come "quali stati compaiono" valgono uguali
             "reachable": parent.keys(),
+            "states": concrete,
+            "symmetry": [{"bases": b["bases"], "instances": len(b["idx"])} for b in sym or ()],
             "parent": parent,
             "truncated": truncated,
             "enabled_ever": enabled_ever,
@@ -688,16 +902,35 @@ class Engine:
             "deadlocks": [{"state": self.from_key(k), "trace": trace(k)} for k in deadlocks],
         }
 
-    def _trace(self, parent: dict, key: tuple) -> list[dict]:
-        """Percorso più breve dallo stato iniziale a key, dalla mappa dei predecessori dell'esplorazione."""
-        out = []
-        while parent[key] is not None:
-            prev, tid = parent[key]
-            t = self.transition[tid]
-            out.append({"transition_id": tid, "entity_id": t["entity_id"], "action": t["action"],
-                        "to": t["to_state_id"], "create": is_create(t)})
-            key = prev
-        return list(reversed(out))
+    def _trace(self, parent: dict, key: tuple, sym: bool = False) -> list[dict]:
+        """Percorso più breve dallo stato iniziale a key, dalla mappa dei predecessori dell'esplorazione.
+        Con la simmetria la mappa collega rappresentanti di orbite: il percorso si rigioca tenendo la permutazione
+        tra rappresentante e stato concreto, e alla fine si porta sull'istanza di key. È un percorso concreto,
+        eseguibile così com'è nel simulatore."""
+        step = lambda tid: (lambda t: {"transition_id": tid, "entity_id": t["entity_id"], "action": t["action"],
+                                       "to": t["to_state_id"], "create": is_create(t)})(self.transition[tid])
+        if not sym:
+            out = []
+            while parent[key] is not None:
+                prev, tid = parent[key]
+                out.append(step(tid))
+                key = prev
+            return list(reversed(out))
+        ck, q = self._canon(key, with_perm=True)  # key = q(ck)
+        chain, k = [], ck
+        while parent[k] is not None:
+            prev, tid = parent[k]
+            chain.append((prev, tid))
+            k = prev
+        p, tids = {}, []  # p: rappresentante corrente → stato concreto raggiunto
+        for prev, tid in reversed(chain):
+            tids.append(self._map_transition(p, tid))
+            _, qx = self._canon(self.key(self.fire(self.transition[tid], self.from_key(prev))[0]), with_perm=True)
+            p = {e: p.get(qx.get(e, e), qx.get(e, e)) for e in self.order}
+        # il percorso concreto finisce in p(ck); portato con q∘p⁻¹ (lo stato iniziale non cambia) finisce in key
+        inv = {v: e for e, v in p.items()}
+        fix = {e: q.get(inv.get(e, e), inv.get(e, e)) for e in self.order}
+        return [step(self._map_transition(fix, tid)) for tid in tids]
 
     # ---------- aspettative ----------
     def check_expectation(self, x: dict) -> dict:
@@ -1023,7 +1256,10 @@ class Engine:
                 "entities": len(self.entities),
                 "states": len(self.state),
                 "transitions": len(self.transitions),
-                "reachable": len(ex["reachable"]),
+                "reachable": ex.get("states", len(ex["reachable"])),
+                "explored": len(ex["reachable"]),
+                "symmetry": [{"entities": [self.ename(b) for b in s["bases"]], "instances": s["instances"]}
+                             for s in ex.get("symmetry") or ()],
                 "theoretical": _product(len(dyn.states_of(e["id"])) for e in dyn.entities),
                 "truncated": ex["truncated"],
                 "instances": {str(v["base"]): v["index"] for v in labels.values() if v["index"] > 1},

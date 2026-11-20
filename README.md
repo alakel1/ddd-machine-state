@@ -31,7 +31,7 @@ Set any combination of states, even ones that "shouldn't happen", and see which 
 ![Simulator](docs/screenshots/simulator.png)
 
 ### Edge case analysis
-A breadth-first model checker over the global state space (up to 1,000,000 combinations, cached until the model changes). It reports:
+A breadth-first model checker over the global state space (up to 1,000,000 combinations, cached until the model changes). With multiple instances, interchangeable copies (#1, #2, #3) are explored once per symmetry class: the symmetry is verified on the expanded model before it is used, and findings, shortest paths and state counts stay exactly those of the full exploration, with paths that replay as they are. It reports:
 
 - **Violable invariants**: a sequence of actions reaches a forbidden combination
 - **Blocked cascades**: a cascade asks an entity for a transition it can't make, with a suggested fix
@@ -114,6 +114,12 @@ docker compose exec backend sh -c "pip install -q -r requirements-dev.txt && pyt
 ```
 
 CI (GitHub Actions) runs the backend tests and the frontend build on every push and pull request.
+
+To check that the symmetry reduction changes nothing on your own domains (full vs reduced exploration):
+
+```bash
+docker compose exec backend python -m tests.equivalence 1 2 3
+```
 
 ## Tech stack
 

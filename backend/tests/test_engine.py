@@ -1,4 +1,5 @@
 """Motore: cascate, guardie, istanze multiple, aspettative, impronte delle segnalazioni."""
+import pytest
 from app.engine import NONE, Engine
 from app.i18n import MESSAGES
 from app.relations import expand
@@ -178,3 +179,59 @@ def test_backend_messages_exist_in_every_language():
 
 def test_none_state_is_zero():
     assert NONE == 0
+
+
+# ---------------------------------------------------------------- riduzione per simmetria
+
+def _order_with_lines(model, lines=3):
+    """Un ordine con righe intercambiabili: preparare, spedire (a ordine aperto), annullare a cascata."""
+    model.entity("Order", ["OPEN", "CLOSED", "CANCELLED"], initial="OPEN", final=["CLOSED", "CANCELLED"])
+    model.entity("Line", ["DRAFT", "READY", "SHIPPED", "CANCELLED"], final=["SHIPPED", "CANCELLED"], gone=["CANCELLED"])
+    model.transition("Line", None, "DRAFT", "add", create=True,
+                     guards=[{"entity_id": model.eid("Order"), "state_ids": [model.s("Order", "OPEN")]}])
+    model.transition("Line", "DRAFT", "READY", "prepare")
+    model.transition("Line", "READY", "SHIPPED", "ship",
+                     guards=[{"entity_id": model.eid("Order"), "state_ids": [model.s("Order", "OPEN")]}])
+    for src in ("DRAFT", "READY"):
+        model.transition("Line", src, "CANCELLED", "cancel", cascade_only=True)
+    model.transition("Order", "OPEN", "CANCELLED", "cancel",
+                     effects=[{"entity_id": model.eid("Line"), "to_state_id": model.s("Line", "CANCELLED"), "skip_final": 1}])
+    model.transition("Order", "OPEN", "CLOSED", "close")  # lascia righe a metà: deadlock e invarianti da trovare
+    model.relation("Order", "Line", instances=lines)
+    model.m["invariants"].append({"id": 900, "name": "Shipped after cancel", "description": "", "severity": "error",
+                                  "rules": [{"entity_id": model.eid("Order"), "state_ids": [model.s("Order", "CANCELLED")], "negate": 0},
+                                            {"entity_id": model.eid("Line"), "state_ids": [model.s("Line", "SHIPPED")], "negate": 0}]})
+
+
+@pytest.mark.parametrize("lines", [2, 3])
+@pytest.mark.parametrize("absence", [False, True])
+def test_symmetry_preserves_every_observation(model, lines, absence):
+    """BFS completa e BFS sulle orbite: stesse segnalazioni (istanze comprese), percorsi minimi, impronte e numero
+    di stati; con meno stati esplorati e percorsi che si rigiocano tali e quali."""
+    from tests.equivalence import compare
+    _order_with_lines(model, lines=lines)
+    if absence:  # una regola su "tutte le istanze": chiuso senza nessuna riga spedita
+        model.m["invariants"].append({"id": 901, "name": "Closed with nothing shipped", "description": "", "severity": "warning",
+                                      "rules": [{"entity_id": model.eid("Order"), "state_ids": [model.s("Order", "CLOSED")], "negate": 0},
+                                                {"entity_id": model.eid("Line"), "state_ids": [model.s("Line", "SHIPPED")], "negate": 1}]})
+    c = compare(model.m)
+    assert all(c["equal"].values()), c["equal"]
+    assert c["full"]["issues"]  # il confronto ha qualcosa da confrontare
+    assert c["unreplayable"] == []
+    assert c["symmetry"] and c["explored"][1] < c["explored"][0]
+
+
+def test_symmetry_is_refused_when_instances_are_not_interchangeable(model):
+    """Figli da 2 e nipoti da 3: il nipote #3 non ha un padre suo e l'invariante di composizione lo lega al #2,
+    quindi #1 e #2 non sono scambiabili. La verifica lo vede e non riduce; i risultati restano quelli completi."""
+    from tests.equivalence import compare
+    model.entity("Tender", ["OPEN", "CLOSED"], initial="OPEN", final=["CLOSED"])
+    model.entity("Phase", ["ON", "OFF"], initial="ON", off=["OFF"])
+    model.entity("Task", ["TODO", "DONE"], initial="TODO", final=["DONE"])
+    model.transition("Phase", "ON", "OFF", "disable")
+    model.transition("Task", "TODO", "DONE", "do")
+    model.relation("Tender", "Phase", instances=2)
+    model.relation("Phase", "Task", instances=3)
+    c = compare(model.m)
+    assert c["symmetry"] == []
+    assert all(c["equal"].values()) and c["unreplayable"] == []
