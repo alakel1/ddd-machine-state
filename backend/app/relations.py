@@ -12,6 +12,8 @@
 import copy
 import re
 
+from .expr import ExprError
+from .expr import parse as parse_expr
 from .i18n import translator
 
 NONE = 0
@@ -102,122 +104,204 @@ def derived_invariants(model: dict, t=None) -> list[dict]:
 
 
 # ---------------------------------------------------------------- istanze multiple
-def _vid(base_id: int, i: int) -> int:
-    """Id virtuale della copia i (>=2); la copia 1 mantiene l'id reale."""
-    return base_id if i == 1 else -(base_id * 10 + i)
+MAX_INSTANCES = 5  # figli simulati per ogni padre, al massimo
+_VID = 1000  # le copie oltre la prima hanno id -(id * _VID + k): fino a 999 copie per entità
+
+
+def _vid(base_id: int, k: int) -> int:
+    """Id virtuale della copia k (>=2); la copia 1 mantiene l'id reale."""
+    return base_id if k == 1 else -(base_id * _VID + k)
+
+
+def vbase(eid: int) -> int:
+    """L'entità del modello di una copia (anche della prima, che ha l'id reale)."""
+    return -eid // _VID if eid < 0 else eid
+
+
+def composition_tree(model: dict) -> tuple[dict, dict]:
+    """(up, anc): per ogni figlio il padre "principale" con il numero di istanze per padre (tra più composizioni
+    verso lo stesso figlio vale quella con più istanze), e per ogni entità la catena degli antenati, dalla radice
+    a se stessa. Un ciclo di composizioni si interrompe: l'entità che lo chiuderebbe resta radice."""
+    up = {}
+    for r in compositions(model):
+        c, p = r["target_id"], r["source_id"]
+        n = max(1, min(MAX_INSTANCES, int(r.get("instances") or 1)))
+        if c != p and (c not in up or n > up[c][1]):
+            up[c] = (p, n)
+    anc = {}
+
+    def chain(e, seen=()):
+        if e not in anc:
+            p = up.get(e)
+            anc[e] = (chain(p[0], (*seen, e)) if p and p[0] not in seen and p[0] != e else []) + [e]
+            if p and p[0] in seen:
+                up.pop(e, None)
+        return anc[e]
+
+    for e in model["entities"]:
+        chain(e["id"])
+    return up, anc
 
 
 def expand(model: dict, tr=None) -> tuple[dict, dict]:
-    """Duplica i figli delle composizioni con instances > 1.
+    """Duplica i figli delle composizioni con instances > 1, per ogni padre: con 2 copie del padre e 3 figli per
+    padre, i figli sono 6. Le copie formano un albero: ognuna ha un percorso, gli indici lungo la catena delle
+    composizioni (la radice ha (1,)).
 
-    Ritorna (modello espanso, etichette {id_entità: {"name", "base"}}).
-    Semantica dei riferimenti verso un'entità duplicata:
-      - da una sua copia o da un'altra entità duplicata: si accoppia per indice (copia i ↔ copia i);
-      - da un'entità singola: guardie su "tutte le istanze esistenti", effetti su tutte le istanze;
-      - invarianti: una condizione di presenza ("riga viva") vale se vale per almeno un'istanza
-        (si espande istanza per istanza), una condizione di assenza (insieme che include NON_ESISTE)
-        vale solo se vale per tutte ("nessuna riga c'è").
+    Ritorna (modello espanso, etichette {id_copia: {"name", "base", "index", "path"}}).
+    Un riferimento da una copia X verso un'entità Y (guardia, effetto, invariante) vale per le copie di Y che
+    hanno la stessa copia dell'antenato comune più profondo: dal figlio al padre la sua copia, dal padre ai figli
+    i suoi, tra fratelli quelli dello stesso padre; senza antenati comuni, tutte le copie. Più copie in una
+    guardia vogliono dire "tutte le istanze esistenti"; un effetto le tocca tutte.
+    Invarianti: una per ogni combinazione di copie coerente (stessi antenati comuni) delle entità con una
+    condizione di presenza; una condizione di assenza (insieme che include NON_ESISTE) vale per tutte le copie
+    coerenti con la combinazione ("nessuna riga c'è").
     """
     tr = tr or translator()
-    counts = {}
-    for r in compositions(model):
-        n = max(1, min(3, int(r.get("instances") or 1)))
-        if n > 1:
-            counts[r["target_id"]] = max(counts.get(r["target_id"], 1), n)
-    # le istanze sono "per ogni padre": se il padre ha più copie, ogni copia ha i suoi figli
-    # (altrimenti un figlio singolo finirebbe condiviso tra le copie del padre)
-    changed = True
-    while changed:
-        changed = False
-        for r in compositions(model):
-            n = counts.get(r["source_id"], 1)
-            if r["target_id"] != r["source_id"] and n > counts.get(r["target_id"], 1):
-                counts[r["target_id"]] = n
-                changed = True
-    if not counts:
+    up, anc = composition_tree(model)
+    paths = {}
+
+    def copies(e):
+        if e not in paths:
+            p = up.get(e)
+            paths[e] = [(1,)] if not p else [pp + (j,) for pp in copies(p[0]) for j in range(1, p[1] + 1)]
+        return paths[e]
+
+    for e in model["entities"]:
+        copies(e["id"])
+    if all(len(v) == 1 for v in paths.values()):
         return model, {}
 
     m = copy.deepcopy(model)
-    labels = {}
-    owner_index = {}  # id entità (anche virtuale) -> indice istanza, solo per le duplicate
+    labels, where = {}, {}  # where: id copia -> (entità, percorso)
+    ids = {}  # (entità, percorso) -> id copia
     entities = []
     for e in m["entities"]:
-        k = counts.get(e["id"])
-        if not k:
+        ps = paths[e["id"]]
+        if len(ps) == 1:
             entities.append(e)
+            where[e["id"]] = (e["id"], ps[0])
+            ids[(e["id"], ps[0])] = e["id"]
             continue
         base_name = e["name"]
-        for i in range(1, k + 1):
-            c = e if i == 1 else copy.deepcopy(e)
-            c["id"] = _vid(e["id"], i)
-            c["name"] = f"{base_name} #{i}"
+        for k, path in enumerate(ps, 1):
+            c = e if k == 1 else copy.deepcopy(e)
+            c["id"] = _vid(e["id"], k)
+            c["name"] = f"{base_name} #{k}"
             for t in c["transitions"]:
                 t["entity_id"] = c["id"]
                 t.setdefault("base_id", t["id"])
-                if i > 1:
-                    t["id"] = -(t["id"] * 10 + i)
-            owner_index[c["id"]] = i
-            labels[c["id"]] = {"name": c["name"], "base": e["id"], "index": i}
+                if k > 1:
+                    t["id"] = -(t["id"] * _VID + k)
+            labels[c["id"]] = {"name": c["name"], "base": e["id"], "index": k, "path": list(path)}
+            where[c["id"]] = (e["id"], path)
+            ids[(e["id"], path)] = c["id"]
             entities.append(c)
     m["entities"] = entities
 
-    def targets(ref_id, ctx_index):
-        """Copie a cui punta un riferimento verso ref_id, dato l'indice del contesto (o None)."""
-        k = counts.get(ref_id)
-        if not k:
-            return [ref_id]
-        if ctx_index and ctx_index <= k:
-            return [_vid(ref_id, ctx_index)]
-        return [_vid(ref_id, i) for i in range(1, k + 1)]
+    def common(a, b):
+        """Quanti antenati hanno in comune le entità a e b (prefisso delle loro catene)."""
+        n = 0
+        for x, y in zip(anc[a], anc[b]):
+            if x != y:
+                break
+            n += 1
+        return n
+
+    def targets(ctx, ref):
+        """Copie di ref a cui punta un riferimento fatto dalla copia ctx."""
+        e, path = where[ctx]
+        d = common(e, ref)
+        return [ids[(ref, p)] for p in paths[ref] if p[:d] == path[:d]]
+
+    def coherent(a, b):
+        (ea, pa), (eb, pb) = where[a], where[b]
+        d = common(ea, eb)
+        return pa[:d] == pb[:d]
 
     original = {e["id"]: e for e in model["entities"]}
+    name_ids = {e["name"]: e["id"] for e in model["entities"]}
+    attr_ids = {(e["id"], a["name"]): a["id"] for e in model["entities"] for a in e.get("attributes") or ()}
+
+    def expr_refs(text, ctx, chosen=None):
+        """A quali variabili va ogni riferimento di un'espressione scritta nel contesto della copia ctx (o, per le
+        invarianti, con le copie scelte in chosen): {"Entità|attributo": [chiavi]}. Riferimenti sconosciuti si
+        lasciano fuori: li segnala il motore."""
+        try:
+            _, refs = parse_expr(text)
+        except ExprError:
+            return {}
+        out = {}
+        for ent, attr in refs:
+            base = (where[ctx][0] if ctx is not None else None) if ent is None else name_ids.get(ent)
+            aid = attr_ids.get((base, attr))
+            if base is None or aid is None:
+                continue
+            copies_ = [chosen[base]] if chosen and base in chosen else targets(ctx, base) if ctx is not None \
+                else [ids[(base, p)] for p in paths[base]]
+            out[f"{ent or ''}|{attr}"] = [f"{c}.{aid}" for c in copies_]
+        return out
+
     for e in m["entities"]:
-        ctx = owner_index.get(e["id"])
+        # padri in composizione di ogni copia (per i figli "congelati" da un padre concluso)
+        e["_parents"] = [x for r in compositions(model) if r["target_id"] == where[e["id"]][0] and r["source_id"] != r["target_id"]
+                         for x in targets(e["id"], r["source_id"])]
         for t in e["transitions"]:
             for g in t["guards"]:
+                if g.get("kind") == "expr":
+                    g["_refs"] = expr_refs(g.get("description") or "", e["id"])
+                    continue
                 parent = original.get(g.get("each_entity_id")) if g.get("kind") == "state" else None
                 if parent and parent["states"] and g.get("entity_id") is not None:
-                    # "per ogni padre": ogni copia del padre con i figli della stessa istanza
-                    g["each"] = [[pv, gone_states(parent), targets(g["entity_id"], owner_index.get(pv) or ctx)]
-                                 for pv in targets(parent["id"], ctx)]
+                    # "per ogni padre": ogni copia del padre con i suoi figli
+                    g["each"] = [[pv, gone_states(parent), targets(pv, g["entity_id"])] for pv in targets(e["id"], parent["id"])]
                     g["entity_id"] = g["each"][0][2][0]
                     continue
-                if g.get("kind") == "state" and g.get("entity_id") in counts:
-                    ids = targets(g["entity_id"], ctx)
-                    g["entity_id"] = ids[0]
-                    if len(ids) > 1:
-                        g["entity_ids"] = ids  # "tutte le istanze esistenti"
-            effects = []
-            for f in t["effects"]:
-                for vid in targets(f["entity_id"], ctx):
-                    effects.append({**f, "entity_id": vid})
-            t["effects"] = effects
+                if g.get("kind") == "state" and g.get("entity_id") in paths:
+                    found = targets(e["id"], g["entity_id"])
+                    g["entity_id"] = found[0]
+                    if len(found) > 1:
+                        g["entity_ids"] = found  # "tutte le istanze esistenti"
+            t["effects"] = [{**f, "entity_id": vid, **({"_refs": expr_refs(f.get("expr") or "", e["id"])} if f.get("kind") == "set" else {})}
+                            for f in t["effects"] for vid in targets(e["id"], f["entity_id"])]
 
     def matches_absence(r):
         return (NONE not in r["state_ids"]) if r.get("negate") else (NONE in r["state_ids"])
 
     invs = []
     for inv in list(m["invariants"]) + derived_invariants(model, tr):
-        multi = {r["entity_id"] for r in inv["rules"] if r["entity_id"] in counts}
-        if not multi:
-            invs.append(inv)
+        # entità citate dalla condizione sugli attributi: anche loro scelgono una copia per combinazione
+        try:
+            in_expr = [name_ids.get(ent) for ent, _ in parse_expr(inv["expr"])[1]] if (inv.get("expr") or "").strip() else []
+        except ExprError:
+            in_expr = []
+        in_expr = [x for x in in_expr if x is not None]
+        if all(len(paths.get(r["entity_id"], [()])) == 1 for r in inv["rules"]) and all(len(paths[x]) == 1 for x in in_expr):
+            invs.append({**inv, "_refs": expr_refs(inv.get("expr") or "", None)} if in_expr else inv)
             continue
-        # assenza su un'entità duplicata: deve valere per tutte le sue istanze
-        def rewrite(r, i):
-            eid = r["entity_id"]
-            if eid not in counts:
-                return r
-            if matches_absence(r):
-                return {**r, "entity_id": _vid(eid, 1), "entity_ids": [_vid(eid, j) for j in range(1, counts[eid] + 1)]}
-            return {**r, "entity_id": _vid(eid, min(i, counts[eid]))}
-        presence = {r["entity_id"] for r in inv["rules"] if r["entity_id"] in counts and not matches_absence(r)}
-        n = max((counts[x] for x in presence), default=1)
-        for i in range(1, n + 1):
-            invs.append({**inv, "id": f"{inv['id']}#{i}" if n > 1 else inv["id"],
-                         "name": tr("r.instance_inv", name=inv["name"], i=i) if n > 1 else inv["name"],
-                         "rules": [rewrite(r, i) for r in inv["rules"]]})
+        present = list(dict.fromkeys([r["entity_id"] for r in inv["rules"] if not matches_absence(r)] + in_expr))
+        combos = [()]
+        for y in present:
+            combos = [c + (ids[(y, p)],) for c in combos for p in paths[y] if all(coherent(x, ids[(y, p)]) for x in c)]
+        for i, combo in enumerate(combos, 1):
+            chosen = dict(zip(present, combo))
+
+            def rewrite(r):
+                y = r["entity_id"]
+                if len(paths[y]) == 1:
+                    return r
+                if y in chosen and not matches_absence(r):
+                    return {**r, "entity_id": chosen[y]}
+                every = [ids[(y, p)] for p in paths[y] if all(coherent(x, ids[(y, p)]) for x in combo)]
+                return {**r, "entity_id": every[0], "entity_ids": every}
+            invs.append({**inv, "id": f"{inv['id']}#{i}" if len(combos) > 1 else inv["id"],
+                         "name": tr("r.instance_inv", name=inv["name"], i=i) if len(combos) > 1 else inv["name"],
+                         "rules": [rewrite(r) for r in inv["rules"]],
+                         "_refs": expr_refs(inv.get("expr") or "", None, chosen)})
     m["invariants"] = invs
     m["_derived_done"] = True
+    m["_tree"] = {"up": {str(c): list(v) for c, v in up.items()}, "anc": {str(e): v for e, v in anc.items()},
+                  "copies": {str(c): [where[c][0], list(where[c][1])] for c in where}}
     return m, labels
 
 

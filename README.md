@@ -31,7 +31,7 @@ Set any combination of states, even ones that "shouldn't happen", and see which 
 ![Simulator](docs/screenshots/simulator.png)
 
 ### Edge case analysis
-A breadth-first model checker over the global state space (up to 1,000,000 combinations, cached until the model changes). With multiple instances, interchangeable copies (#1, #2, #3) are explored once per symmetry class: the symmetry is verified on the expanded model before it is used, and findings, shortest paths and state counts stay exactly those of the full exploration, with paths that replay as they are. It reports:
+A breadth-first model checker over the global state space (up to 1,000,000 combinations, with time and memory limits, cached until the model changes). With multiple instances, interchangeable copies are explored once per symmetry class, on two levels (sibling children, and parents carrying their children along): the symmetry is verified on the expanded model before it is used, and findings, shortest paths and state counts stay exactly those of the full exploration, with paths that replay as they are. It reports:
 
 - **Violable invariants**: a sequence of actions reaches a forbidden combination
 - **Blocked cascades**: a cascade asks an entity for a transition it can't make, with a suggested fix
@@ -42,15 +42,22 @@ A breadth-first model checker over the global state space (up to 1,000,000 combi
 - **Creations that skip checks** the normal path enforces
 - **Broken compositions**: a child alive without its parent
 - **Relations without rules** and **undeclared dependencies**
+- **Cascades across aggregate boundaries**: an action that changes several aggregates in one atomic step hides a distributed transaction (an architectural warning, acceptable with a reason)
+- **Invalid expressions** on attributes
 
 Every finding comes with the **shortest path** that reproduces it, which you can replay in the simulator. A co-existence matrix shows which state pairs of two entities are reachable together.
+
+Every analysis ends with a **verification certificate**: complete, incomplete or not verifiable, with what the bounded model is (states explored, instances, symmetry used or refused and why, cascades cut at the depth limit — kept apart from real cycles — message queue bounds) and the assumptions (text rules taken as true, attributes not modelled, time not modelled). A "no errors" holds for the bounded model, and the page says so.
 
 Findings are grouped **by cause**, so fixing one cause clears all its symptoms. Each one has a **Fix** button with concrete fixes derived from the model (add the missing transition, skip concluded children, widen a guard, add the effect a composition needs…): **preview** what a fix would solve or introduce, then apply it in one click. Findings that are intended can be **accepted** (or postponed) with a note; they come back if the part of the model involved changes. The exploration runs in the background as soon as the model changes, so results are usually ready when you open them.
 
 ![Fix with preview](docs/screenshots/fix.png)
 
 ### Expectations
-Acceptance tests for the domain: **goals** that must stay reachable ("it must be possible to reach Order DELIVERED with Payment CAPTURED") and **paths** saved from the simulator that must keep working, or stay blocked. They are checked at every analysis, so a change that breaks one shows up right away.
+Acceptance tests for the domain: **goals** that must stay reachable ("it must be possible to reach Order DELIVERED with Payment CAPTURED"), **paths** saved from the simulator that must keep working, or stay blocked, and **properties over time**: "always still reachable" (no business dead end) and "whenever P, eventually Q" (eventual consistency, checked under fairness). They are checked at every analysis, so a change that breaks one shows up right away, with a concrete counterexample to replay.
+
+### Attributes, events and asynchronous messages
+Boolean, bounded integer and enumerated attributes can take part in the analysis: guards like `amount <= Payment.captured`, effects like `qty := qty + 1` and invariants on attributes. Expressions are interpreted by the tool (a small whitelisted language), never executed. An effect can be **asynchronous**: it becomes a message delivered in a later step, in any order, with a bounded number of messages in flight and a delivery guarantee (exactly once, at least once, at most once), so the analysis finds the races of eventual consistency.
 
 ![Expectations](docs/screenshots/expectations.png)
 
@@ -81,7 +88,9 @@ A built-in guide explains every concept of the model with an example; the "?" ne
 | **Invariant** | A forbidden combination of states (AND of conditions); may use `DOES_NOT_EXIST` |
 | **Relation** | 1-1 or 1-N between two entities. A many-to-many link is modelled as a **join entity**, child of both, since it usually has its own states and rules (an imported N-N is flagged, and Fix creates the join entity) |
 | **Composition** | The child cannot exist without the parent. Two invariants follow: a child must be deleted when the parent is deleted (or does not exist), and cannot stay active when the parent is off. The tool also checks that creating the child requires the parent, and that the actions deleting or turning off the parent take care of the children |
-| **Multiple instances** | On a composition, simulate 2–3 children per parent in the analysis (e.g. "one item confirmed, the other deleted") |
+| **Multiple instances** | On a composition, simulate 2–5 children for each parent in the analysis (e.g. "one item confirmed, the other deleted"): with 2 phases and 3 functions per phase there are 6 functions |
+| **Attribute** | Documentation, or a verified variable with a finite domain, usable in condition guards, assignments and invariants |
+| **Asynchronous effect** | An event: the effect is delivered as a message in a later step, not in the same transaction |
 
 The simulation model has one instance per entity: a single business case, such as one order with its payment, shipment and invoice.
 
@@ -132,7 +141,8 @@ docker compose exec backend python -m tests.equivalence 1 2 3
 ```
 backend/app/
   engine.py        state machine, cascade propagation, exploration, analysis
-  relations.py     compositions, multiple instances, relation checks
+  relations.py     compositions, multiple instances (per-parent expansion), relation checks
+  expr.py          expressions on attributes: a small whitelisted language, interpreted (no eval)
   fixes.py         fixes proposed for each finding ("Fix")
   history.py       model snapshots: undo, restore, compare
   editing.py       multi-row edits and fix operations
@@ -144,7 +154,8 @@ backend/app/
 backend/tests/     engine and API tests (pytest)
 frontend/src/
   views/           Home, Model, Entity, Invariants, Actions, Simulator, Analysis, Expectations, History, Spec, Guide
-  components/      Mermaid, FixModal, EffectEditor, ActionNode, AckBadge, HelpLink, StateChip, StatePicker, Trace, Modal, PageHeader
+  components/      Mermaid, FixModal, Certificate, EffectEditor, ExprInput, ConditionsEditor, ActionNode, AckBadge, HelpLink,
+                   StateChip, StatePicker, Trace, Modal, PageHeader
   locales/         UI translations (en.json, it.json)
   diagrams.js      Mermaid generators (state diagram, context map)
   store.js         reactive store and API client

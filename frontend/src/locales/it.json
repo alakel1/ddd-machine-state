@@ -91,6 +91,26 @@
       "body": "Cosa fa un'azione alle altre entità: le porta in uno stato, fa eseguire loro un'azione per nome, oppure le fa nascere. Ogni effetto deve trovare sull'entità figlia una transizione che esista e le cui guardie passino: se non la trova, è una cascata bloccata.",
       "example": "Ordine «annulla» → Pagamento in ANNULLATO (serve una transizione del Pagamento verso ANNULLATO)."
     },
+    "async": {
+      "title": "Effetti asincroni (eventi)",
+      "body": "Un effetto marcato «asincrono» non avviene nello stesso passo dell'azione: parte un messaggio, consegnato in un passo successivo, in qualsiasi ordine rispetto alle altre azioni e agli altri messaggi. Così l'analisi trova le corse della consistenza eventuale. Per il dominio si sceglie quanti messaggi possono essere in volo insieme e la garanzia di consegna: esattamente una volta, almeno una volta (un messaggio può arrivare due volte) o al più una volta (può perdersi). Un effetto asincrono non conta come transazione su più aggregati. Nel simulatore i messaggi in volo si consegnano a mano.",
+      "example": "Ordine «paga» → messaggio a Spedizione: PRONTA. Se nel frattempo l'ordine viene annullato, il messaggio arriva su una spedizione già annullata: l'analisi lo trova."
+    },
+    "attributes": {
+      "title": "Attributi verificati ed espressioni",
+      "body": "Un attributo booleano, intero (con minimo e massimo) o enumerato può partecipare all'analisi: si attiva «verifica», si sceglie il dominio e il valore iniziale. Poi lo si usa nelle guardie «condizione» (amount <= Payment.captured), negli effetti «imposta attributo» (qty := qty + 1) e nelle invarianti. Sintassi: confronti, and / or / not, + - *, numeri, vero / falso, testi tra apici; l'attributo della propria entità si scrive da solo, quello di un'altra Entità.attributo o [Nome con spazi].attributo. Le espressioni sono interpretate dal tool, non eseguite: niente codice arbitrario. Ogni valore possibile è uno stato in più da esplorare: domini piccoli.",
+      "example": "Rimborso «paga» con la condizione importo <= Pagamento.incassato; invariante: Rimborso PAGATO e Rimborso.importo > Pagamento.incassato."
+    },
+    "temporal": {
+      "title": "Proprietà nel tempo",
+      "body": "Oltre a «raggiungibile almeno una volta», un'aspettativa può dire «sempre ancora raggiungibile» (da qualsiasi stato ci si arrivi, l'obiettivo resta raggiungibile: nessun vicolo cieco di business) oppure «ogni volta che P, prima o poi Q» (consistenza eventuale). La seconda si verifica supponendo l'equità: nessuna azione possibile viene ignorata per sempre, quindi un ciclo innocuo (sospendi e riprendi) non la rompe, mentre uno stato da cui Q non è più raggiungibile sì. Il controesempio è un percorso concreto, da riprodurre nel simulatore.",
+      "example": "Ogni volta che Ordine è PAGATO, prima o poi Spedizione è CONSEGNATA: rotta se una spedizione SMARRITA non ha più uscite."
+    },
+    "certificate": {
+      "title": "Certificato di verifica",
+      "body": "Dice cosa dimostra davvero l'analisi: completa (tutti gli stati del modello limitato esplorati), incompleta (fermata per limite di stati, tempo o memoria, oppure cascate troppo lunghe non seguite fino in fondo) o non verificabile. Elenca le dimensioni del modello limitato (istanze, simmetria usata) e le assunzioni: regole testuali considerate sempre vere, tempo e messaggi non modellati. Un «nessun errore» vale per il modello limitato, non è una garanzia sul sistema reale.",
+      "example": "«Verifica completa nel modello limitato: nessun errore trovato» con 2 Righe per Ordine non dice nulla su ordini con 10 righe."
+    },
     "effectSources": {
       "title": "Effetti che creano le transizioni del figlio",
       "body": "Su un effetto «passa allo stato» scegli da quali stati del figlio deve funzionare: le transizioni «solo in cascata» che mancano le crea il tool, con il nome dell'azione che le richiede, e le toglie quando non servono più. La cascata si dichiara così in un punto solo. Gli stati proposti sono quelli in cui il figlio si trova davvero quando l'azione può partire.",
@@ -118,7 +138,7 @@
     },
     "instances": {
       "title": "Istanze multiple",
-      "body": "Su una composizione si può chiedere all'analisi di simulare 2-3 figli per padre (#1, #2), per trovare casi come «un figlio confermato e l'altro eliminato». Ogni copia del padre ha le sue copie dei figli. Il simulatore resta a un'istanza.",
+      "body": "Su una composizione si può chiedere all'analisi di simulare da 2 a 5 figli per ogni padre (#1, #2…), per trovare casi come «un figlio confermato e l'altro eliminato». Ogni copia del padre ha i suoi figli: con 2 Fasi e 3 Funzioni per Fase, le Funzioni sono 6. Le copie fratelle sono intercambiabili: l'analisi lo verifica e le esplora una volta per classe, con gli stessi risultati. Il simulatore resta a un'istanza.",
       "example": "Ordine con 2 Righe: l'analisi esplora anche Riga #1 SPEDITA e Riga #2 ANNULLATA."
     },
     "invariants": {
@@ -186,6 +206,42 @@
     "openHint": "Le cause ancora aperte trovate dall'analisi degli edge case (escluse quelle accettate).",
     "noOpen": "Nessun punto aperto."
   },
+  "expr": {
+    "placeholder": "es. importo <= Pagamento.incassato",
+    "guardPlaceholder": "es. importo <= Pagamento.incassato",
+    "setPlaceholder": "es. importo + 1",
+    "invariantPlaceholder": "es. Rimborso.importo > Pagamento.incassato",
+    "condition": "condizione",
+    "reads": "legge {list}"
+  },
+  "attr": {
+    "verify": "verifica",
+    "verifyHint": "L'attributo partecipa all'analisi: si sceglie un dominio finito e un valore iniziale, e si può usare in condizioni, assegnazioni e invarianti.",
+    "min": "minimo",
+    "max": "massimo",
+    "values": "valori, separati da virgola",
+    "initial": "valore iniziale"
+  },
+  "cert": {
+    "title": "Certificato",
+    "show": "dettagli",
+    "hide": "chiudi",
+    "dimensions": "Modello limitato e assunzioni",
+    "row": {
+      "exploration": "Esplorazione",
+      "instances": "Istanze",
+      "symmetry": "Simmetria",
+      "cascades": "Cascate",
+      "rules": "Regole testuali",
+      "attributes": "Attributi",
+      "time": "Tempo",
+      "messages": "Messaggi"
+    },
+    "mode": {
+      "full": "Esplorazione completa: cosa è garantito",
+      "symmetry": "Esplorazione con simmetria: cosa è garantito"
+    }
+  },
   "actions": {
     "eyebrow": "Cascate",
     "title": "Azioni",
@@ -204,6 +260,13 @@
     "covered": "Transizione aggiunta",
     "noTarget": "Nessuna azione del figlio corrisponde a questo effetto.",
     "noEffects": "Nessun effetto.",
+    "async": "Messaggi asincroni",
+    "inFlight": "in volo al massimo",
+    "delivery": {
+      "exactly_once": "consegna esattamente una volta",
+      "at_least_once": "almeno una volta (duplicati)",
+      "at_most_once": "al più una volta (perdite)"
+    },
     "effectsOf": "Effetti di «{action}» ({entity})"
   },
   "exp": {
@@ -216,6 +279,20 @@
     "empty": "Nessuna aspettativa. Aggiungi un obiettivo («deve essere possibile arrivare a Ordine CONSEGNATO») oppure, dal simulatore, salva come test una sequenza di azioni che deve continuare a funzionare.",
     "summary": "aspettative rispettate",
     "goal": "Obiettivo",
+    "kindLabel": "Tipo",
+    "kinds": {
+      "goal": "Raggiungibile (almeno una volta)",
+      "always": "Sempre ancora raggiungibile",
+      "leads_to": "Ogni volta che… prima o poi…"
+    },
+    "alwaysReach": "Da ogni stato si deve poter arrivare a",
+    "whenever": "Ogni volta che",
+    "eventually": "Prima o poi",
+    "alwaysOk": "Da ogni stato raggiungibile ci si può ancora arrivare.",
+    "leads_toOk": "Rispettata: dopo ogni occorrenza ci si arriva sempre (supponendo che nessuna azione possibile venga ignorata per sempre).",
+    "vacuous": "Rispettata, ma la condizione «ogni volta che» non si verifica mai.",
+    "alwaysBroken": "Con questo percorso si arriva in uno stato da cui non ci si arriva più:",
+    "leads_toBroken": "Con questo percorso, dopo la condizione e senza mai soddisfare l'obiettivo, si arriva dove non è più raggiungibile:",
     "path": {
       "possible": "Percorso che deve funzionare",
       "blocked": "Percorso che deve restare bloccato"
@@ -464,6 +541,8 @@
     "descriptionPlaceholder": "Perché è vietato",
     "conditions": "Condizioni",
     "conditionsHint": "(tutte vere ⇒ violazione)",
+    "expr": "Condizione sugli attributi",
+    "exprHint": "(facoltativa, in AND con le condizioni sugli stati)",
     "condition": "condizione",
     "inOneOf": "è in uno di",
     "inNoneOf": "non è in nessuno di"
@@ -497,6 +576,13 @@
     "forced": "forzata",
     "backHere": "torna qui",
     "setTo": "{entity} impostato a {state}",
+    "setAttr": "{attr} impostato a {value}",
+    "messages": "Messaggi in volo",
+    "msg": {
+      "deliver": "consegna",
+      "duplicate": "consegna e tieni",
+      "lose": "perdi"
+    },
     "scenarioLoaded": "Scenario «{name}» caricato",
     "scenarioSaved": "Scenario salvato",
     "saveScenario": "Salva scenario",
@@ -532,7 +618,9 @@
       "dead_actions": "azioni morte",
       "composition": "composizione",
       "relations": "relazioni",
-      "liveness": "vita degli stati"
+      "liveness": "vita degli stati",
+      "architecture": "confini degli aggregati",
+      "expressions": "espressioni"
     },
     "noIssues": "Nessun problema trovato con questi filtri.",
     "view": {
@@ -654,6 +742,9 @@
     "effect": {
       "add": "effetto",
       "toState": "passa allo stato",
+      "setAttr": "imposta attributo",
+      "deferred": "asincrono",
+      "deferredHint": "Evento: l'effetto non avviene nello stesso passo ma come messaggio, consegnato dopo, in qualsiasi ordine rispetto alle altre azioni.",
       "runsAction": "esegue l'azione",
       "created": "nasce",
       "runs": "esegue «{action}»",

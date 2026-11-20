@@ -16,6 +16,7 @@ import AckBadge from '../components/AckBadge.vue'
 import { guardText, effectText, isAlternative } from '../texts'
 import HelpLink from '../components/HelpLink.vue'
 import EffectEditor from '../components/EffectEditor.vue'
+import ExprInput from '../components/ExprInput.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -85,6 +86,14 @@ async function moveState(s, dir) {
 
 // ---------- attributi ----------
 const TYPES = ['string', 'text', 'int', 'decimal', 'bool', 'date', 'datetime', 'enum', 'ref']
+// tipi che l'analisi sa trattare (dominio finito) e i valori che possono assumere
+const VERIFIABLE = ['bool', 'int', 'decimal', 'enum']
+function attrValues(a) {
+  if (a.type === 'bool') return [false, true]
+  if (a.type === 'enum') return a.domain?.values || []
+  const lo = a.domain?.min ?? 0, hi = a.domain?.max ?? 0
+  return hi >= lo && hi - lo <= 1000 ? Array.from({ length: hi - lo + 1 }, (_, i) => lo + i) : []
+}
 async function addAttr() {
   if (!newAttr.value.trim()) return
   await api.post('/attributes', { entity_id: e.value.id, name: newAttr.value.trim() })
@@ -129,8 +138,8 @@ const fromSel = computed({
   },
 })
 function addGuard(kind) {
-  draft.value.guards.push(kind === 'rule'
-    ? { kind: 'rule', description: '', state_ids: [], negate: 0, entity_id: null }
+  draft.value.guards.push(kind !== 'state'
+    ? { kind, description: '', state_ids: [], negate: 0, entity_id: null }
     : { kind: 'state', entity_id: others.value[0]?.id ?? e.value.id, state_ids: [], negate: 0, description: '', each_entity_id: null })
 }
 let effectKey = 0
@@ -560,8 +569,8 @@ function changeGuardEntity(g) {
               <div v-if="t.guards.length || t.effects.length" class="mt-2 flex flex-wrap gap-1.5">
                 <template v-for="(g, gi) in t.guards" :key="'g' + g.id">
                   <span v-if="isAlternative(t.guards, gi)" class="text-[11px] font-semibold text-zinc-400 self-center">{{ $t('entity.or') }}</span>
-                  <span class="tag" :class="g.kind === 'rule' ? 'bg-sky-50 text-sky-700 ring-sky-200' : 'bg-zinc-100 text-zinc-700 ring-zinc-200'">
-                    <i class="fa-solid fa-fw text-[10px]" :class="g.kind === 'rule' ? 'fa-flag' : 'fa-lock'" />{{ guardText(g) }}
+                  <span class="tag" :class="g.kind === 'rule' ? 'bg-sky-50 text-sky-700 ring-sky-200' : g.kind === 'expr' ? 'bg-violet-50 text-violet-700 ring-violet-200 font-mono' : 'bg-zinc-100 text-zinc-700 ring-zinc-200'">
+                    <i class="fa-solid fa-fw text-[10px]" :class="g.kind === 'rule' ? 'fa-flag' : g.kind === 'expr' ? 'fa-equals' : 'fa-lock'" />{{ guardText(g) }}
                   </span>
                 </template>
                 <span v-for="f in t.effects" :key="'f' + f.id" class="tag bg-amber-50 text-amber-800 ring-amber-200">
@@ -624,6 +633,29 @@ function changeGuardEntity(g) {
               </label>
               <input :value="a.description" :placeholder="$t('entity.notesPlaceholder')" @change="(ev) => patchAttr(a, { description: ev.target.value })"
                      class="flex-1 text-sm text-zinc-500 bg-transparent rounded px-1.5 py-1 hover:bg-zinc-50 focus:outline-none focus:ring-2 focus:ring-indigo-500/50 placeholder:text-zinc-300" />
+              <!-- partecipa all'analisi: dominio finito e valore iniziale -->
+              <template v-if="VERIFIABLE.includes(a.type)">
+                <label class="flex items-center gap-1.5 text-xs text-violet-700 cursor-pointer" :title="$t('attr.verifyHint')">
+                  <input type="checkbox" :checked="!!a.verify" class="accent-violet-600" @change="(ev) => patchAttr(a, { verify: ev.target.checked ? 1 : 0 })" />
+                  {{ $t('attr.verify') }}
+                </label>
+                <template v-if="a.verify">
+                  <template v-if="a.type === 'int' || a.type === 'decimal'">
+                    <input type="number" :value="a.domain?.min ?? 0" class="input !w-16 !py-1 !text-xs" :title="$t('attr.min')"
+                           @change="(ev) => patchAttr(a, { domain: { ...a.domain, min: Number(ev.target.value) } })" />
+                    <span class="text-xs text-zinc-400">…</span>
+                    <input type="number" :value="a.domain?.max ?? 0" class="input !w-16 !py-1 !text-xs" :title="$t('attr.max')"
+                           @change="(ev) => patchAttr(a, { domain: { ...a.domain, max: Number(ev.target.value) } })" />
+                  </template>
+                  <input v-else-if="a.type === 'enum'" :value="(a.domain?.values || []).join(', ')" class="input !w-40 !py-1 !text-xs font-mono"
+                         :placeholder="$t('attr.values')"
+                         @change="(ev) => patchAttr(a, { domain: { values: ev.target.value.split(',').map((x) => x.trim()).filter(Boolean) } })" />
+                  <select :value="JSON.stringify(a.initial ?? null)" class="input !w-24 !py-1 !text-xs font-mono" :title="$t('attr.initial')"
+                          @change="(ev) => patchAttr(a, { initial: JSON.parse(ev.target.value) })">
+                    <option v-for="v in attrValues(a)" :key="String(v)" :value="JSON.stringify(v)">{{ v }}</option>
+                  </select>
+                </template>
+              </template>
               <button class="icon-btn opacity-0 group-hover:opacity-100 hover:!text-rose-600" @click="removeAttr(a)"><i class="fa-solid fa-trash-can fa-fw text-[12px]" /></button>
             </div>
           </div>
@@ -742,6 +774,7 @@ function changeGuardEntity(g) {
             </div>
             <div class="flex gap-1">
               <button type="button" class="btn-ghost !text-xs" @click="addGuard('state')"><i class="fa-solid fa-plus fa-fw text-[12px]" /> {{ $t('entity.onState') }}</button>
+              <button type="button" class="btn-ghost !text-xs" @click="addGuard('expr')"><i class="fa-solid fa-plus fa-fw text-[12px]" /> {{ $t('expr.condition') }}</button>
               <button type="button" class="btn-ghost !text-xs" @click="addGuard('rule')"><i class="fa-solid fa-plus fa-fw text-[12px]" /> {{ $t('entity.rule') }}</button>
             </div>
           </div>
@@ -781,6 +814,11 @@ function changeGuardEntity(g) {
                   <span v-if="g.each_entity_id">{{ $t(g.negate ? 'entity.eachHintNot' : 'entity.eachHint', { parent: ename(g.each_entity_id), entity: ename(g.entity_id) }) }}</span>
                   <HelpLink topic="guardsEach" />
                 </div>
+              </div>
+              <div v-else-if="g.kind === 'expr'" class="flex items-start gap-2">
+                <i class="fa-solid fa-equals fa-fw text-[14px] text-violet-500 shrink-0 mt-2" />
+                <ExprInput v-model="g.description" :entity-id="e.id" :placeholder="$t('expr.guardPlaceholder')" />
+                <button type="button" class="icon-btn hover:!text-rose-600" @click="draft.guards.splice(i, 1)"><i class="fa-solid fa-xmark fa-fw text-[14px]" /></button>
               </div>
               <div v-else class="flex items-center gap-2">
                 <i class="fa-solid fa-flag fa-fw text-[14px] text-sky-500 shrink-0" />

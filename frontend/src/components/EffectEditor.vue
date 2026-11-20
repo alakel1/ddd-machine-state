@@ -6,6 +6,7 @@ import { computed, onMounted, ref } from 'vue'
 import { store, api, entity, isCreatable } from '../store'
 import { t } from '../i18n'
 import HelpLink from './HelpLink.vue'
+import ExprInput from './ExprInput.vue'
 
 // owner: entità dell'azione; from: suo stato di partenza (0 = creazione, null = qualsiasi); entities: bersagli possibili
 const props = defineProps({ f: Object, owner: Number, from: { type: Number, default: null }, entities: Array })
@@ -13,6 +14,15 @@ const emit = defineEmits(['remove'])
 const f = props.f
 
 const child = computed(() => entity(f.entity_id))
+// "imposta attributo": anche sull'entità dell'azione stessa, purché abbia attributi verificati
+const verified = (e) => (e?.attributes || []).filter((a) => a.verify)
+const targets = computed(() => (f.kind === 'set' ? [entity(props.owner), ...props.entities].filter((e) => verified(e).length) : props.entities))
+const canSet = computed(() => [entity(props.owner), ...props.entities].some((e) => verified(e).length))
+function changeKind() {
+  if (f.kind === 'set' && !verified(child.value).length) f.entity_id = targets.value[0]?.id
+  if (f.kind === 'set') f.action = verified(entity(f.entity_id))[0]?.name || ''
+  if (f.kind !== 'set' && f.entity_id === props.owner) f.entity_id = props.entities[0]?.id
+}
 // nomi delle azioni (non di creazione) che l'effetto può far eseguire
 const actions = computed(() => [...new Set((child.value?.transitions || []).filter((x) => x.kind !== 'create').map((x) => x.action))])
 const candidates = computed(() => (child.value?.states || []).filter((s) => !s.is_final && s.id !== f.to_state_id))
@@ -68,13 +78,14 @@ onMounted(() => {
 <template>
   <div class="rounded-xl ring-1 ring-amber-200 bg-amber-50/40 p-3 space-y-2">
     <div class="flex items-center gap-2">
-      <select v-model="f.entity_id" class="input !w-44 !py-1.5" @change="reset">
-        <option v-for="x in entities" :key="x.id" :value="x.id">{{ x.name }}</option>
+      <select v-model="f.entity_id" class="input !w-44 !py-1.5" @change="f.kind === 'set' ? (f.action = verified(child)[0]?.name || '') : reset()">
+        <option v-for="x in targets" :key="x.id" :value="x.id">{{ x.name }}</option>
       </select>
-      <select v-model="f.kind" class="input !w-40 !py-1.5">
+      <select v-model="f.kind" class="input !w-40 !py-1.5" @change="changeKind">
         <option value="state">{{ $t('entity.effect.toState') }}</option>
         <option value="action">{{ $t('entity.effect.runsAction') }}</option>
         <option v-if="isCreatable(child)" value="create">{{ $t('entity.effect.created') }}</option>
+        <option v-if="canSet" value="set">{{ $t('entity.effect.setAttr') }}</option>
       </select>
       <select v-if="f.kind === 'state'" v-model="f.to_state_id" class="input !w-48 !py-1.5 font-mono"
               @change="generating && (f.sources = f.sources.filter((x) => x !== f.to_state_id))">
@@ -83,8 +94,19 @@ onMounted(() => {
       <select v-else-if="f.kind === 'action'" v-model="f.action" class="input !w-48 !py-1.5">
         <option v-for="a in actions" :key="a" :value="a">{{ a }}</option>
       </select>
+      <template v-else-if="f.kind === 'set'">
+        <select v-model="f.action" class="input !w-36 !py-1.5 font-mono">
+          <option v-for="a in verified(child)" :key="a.id" :value="a.name">{{ a.name }}</option>
+        </select>
+        <span class="font-mono text-zinc-500">:=</span>
+      </template>
       <span v-else class="w-48 text-xs text-zinc-500 px-1">{{ $t('entity.effect.createHint') }}</span>
-      <label v-if="f.kind !== 'create'" class="flex items-center gap-1.5 text-xs text-zinc-600 whitespace-nowrap cursor-pointer"
+      <label v-if="f.kind !== 'set' && f.entity_id !== owner" class="flex items-center gap-1.5 text-xs text-violet-700 whitespace-nowrap cursor-pointer"
+             :title="$t('entity.effect.deferredHint')">
+        <input type="checkbox" :checked="!!f.deferred" class="accent-violet-600" @change="(ev) => (f.deferred = ev.target.checked ? 1 : 0)" />
+        <i class="fa-solid fa-envelope text-[10px]" /> {{ $t('entity.effect.deferred') }} <HelpLink topic="async" />
+      </label>
+      <label v-if="f.kind === 'state' || f.kind === 'action'" class="flex items-center gap-1.5 text-xs text-zinc-600 whitespace-nowrap cursor-pointer"
              :title="$t('entity.effect.skipFinalHint')">
         <input type="checkbox" :checked="!!f.skip_final" class="accent-indigo-600" @change="(ev) => (f.skip_final = ev.target.checked ? 1 : 0)" />
         {{ $t('entity.effect.skipFinal') }} <HelpLink topic="skipFinal" />
@@ -92,6 +114,7 @@ onMounted(() => {
       <div class="flex-1" />
       <button type="button" class="icon-btn hover:!text-rose-600" @click="emit('remove')"><i class="fa-solid fa-xmark fa-fw text-[14px]" /></button>
     </div>
+    <ExprInput v-if="f.kind === 'set'" v-model="f.expr" :entity-id="owner" :placeholder="$t('expr.setPlaceholder')" />
     <input v-model="f.description" class="input !py-1 !text-xs" :placeholder="$t('common.notes').toLowerCase()" />
     <!-- da quali stati del figlio: le transizioni "solo in cascata" che mancano le crea il tool -->
     <div v-if="f.kind === 'state'" class="flex flex-wrap items-center gap-1.5 text-xs">

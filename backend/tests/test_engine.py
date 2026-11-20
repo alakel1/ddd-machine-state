@@ -221,9 +221,9 @@ def test_symmetry_preserves_every_observation(model, lines, absence):
     assert c["symmetry"] and c["explored"][1] < c["explored"][0]
 
 
-def test_symmetry_is_refused_when_instances_are_not_interchangeable(model):
-    """Figli da 2 e nipoti da 3: il nipote #3 non ha un padre suo e l'invariante di composizione lo lega al #2,
-    quindi #1 e #2 non sono scambiabili. La verifica lo vede e non riduce; i risultati restano quelli completi."""
+def test_nested_instances_are_per_parent_and_symmetric_on_two_levels(model):
+    """2 fasi per gara, 3 compiti per fase: 6 compiti, 3 di ciascuna fase. Si scambiano le fasi (ognuna con i suoi
+    compiti) e i compiti dentro ogni fase; i risultati restano quelli dell'esplorazione completa."""
     from tests.equivalence import compare
     model.entity("Tender", ["OPEN", "CLOSED"], initial="OPEN", final=["CLOSED"])
     model.entity("Phase", ["ON", "OFF"], initial="ON", off=["OFF"])
@@ -232,6 +232,242 @@ def test_symmetry_is_refused_when_instances_are_not_interchangeable(model):
     model.transition("Task", "TODO", "DONE", "do")
     model.relation("Tender", "Phase", instances=2)
     model.relation("Phase", "Task", instances=3)
+    _, labels = expand(model.m)
+    tasks = [v for v in labels.values() if v["base"] == model.eid("Task")]
+    assert len(tasks) == 6 and sorted(v["path"][1] for v in tasks) == [1, 1, 1, 2, 2, 2]
+    c = compare(model.m)
+    assert {s["entities"][0] for s in c["symmetry"]} == {"Phase", "Task"}
+    assert all(c["equal"].values()) and c["unreplayable"] == []
+    assert c["explored"][1] < c["explored"][0]
+
+
+def test_symmetry_is_refused_when_it_cannot_be_proved(model):
+    """Annullare l'ordine annulla le righe una dopo l'altra, e annullare una riga riapre l'ordine: le cascate si
+    leggono a vicenda, l'ordine degli effetti conta e scambiare le righe non è dimostrabilmente innocuo.
+    La verifica rifiuta e l'analisi resta quella completa."""
+    from tests.equivalence import compare
+    _order_with_lines(model, lines=2)
+    line_cancel = [t for e in model.m["entities"] if e["name"] == "Line" for t in e["transitions"] if t["action"] == "cancel"]
+    for t in line_cancel:
+        t["effects"].append({"id": 990 + t["id"], "transition_id": t["id"], "entity_id": model.eid("Order"), "kind": "state",
+                             "to_state_id": model.s("Order", "OPEN"), "action": "", "skip_final": 0, "description": ""})
     c = compare(model.m)
     assert c["symmetry"] == []
     assert all(c["equal"].values()) and c["unreplayable"] == []
+
+
+# ---------------------------------------------------------------- certificato di verifica
+
+def test_certificate_says_what_was_verified(model):
+    _order_with_lines(model, lines=2)
+    cert = Engine(model.m, "en").analyze()["certificate"]
+    assert cert["verdict"] == "complete" and cert["mode"] == "symmetry"
+    assert {r["key"] for r in cert["rows"]} >= {"exploration", "instances", "symmetry", "cascades", "rules", "time", "messages"}
+    small = Engine(model.m, "en").analyze(limit=5)["certificate"]
+    assert small["verdict"] == "incomplete"
+    assert next(r for r in small["rows"] if r["key"] == "exploration")["status"] == "limit"
+
+
+def test_cascade_depth_limit_is_not_reported_as_a_cycle(model):
+    """Una catena di cascate più lunga del limite: non è un errore del modello ma una parte non verificata,
+    dichiarata nel certificato. Un ciclo vero resta un errore."""
+    from app.engine import MAX_CASCADE_DEPTH
+    names = [f"E{i}" for i in range(MAX_CASCADE_DEPTH + 2)]
+    for n in names:
+        model.entity(n, ["A", "B"], initial="A", final=["B"])
+    for n, nxt in zip(names, names[1:] + [None]):
+        model.transition(n, "A", "B", "go", cascade_only=n != names[0],
+                         effects=[{"entity_id": model.eid(nxt), "to_state_id": model.s(nxt, "B")}] if nxt else [])
+    r = Engine(model.m, "en").analyze()
+    assert not [i for i in r["issues"] if i["category"] == "effect_conflict"]
+    assert r["certificate"]["verdict"] == "incomplete" and r["certificate"]["cut"]
+
+    from tests.conftest import Model
+    loop = Model()
+    loop.entity("P", ["A", "B"], initial="A")
+    loop.entity("Q", ["A", "B"], initial="A")
+    run = lambda name: [{"kind": "action", "action": name}]
+    loop.transition("P", "A", "B", "go", effects=[{"entity_id": loop.eid("Q"), **run("ping")[0]}])
+    loop.transition("Q", "A", "B", "ping", cascade_only=True, effects=[{"entity_id": loop.eid("P"), **run("pong")[0]}])
+    loop.transition("P", "B", "A", "pong", cascade_only=True, effects=[{"entity_id": loop.eid("Q"), **run("ping2")[0]}])
+    loop.transition("Q", "B", "A", "ping2", cascade_only=True, effects=[{"entity_id": loop.eid("P"), **run("go")[0]}])
+    r = Engine(loop.m, "en").analyze()
+    assert [i for i in r["issues"] if i["category"] == "effect_conflict"]
+    assert not r["certificate"]["cut"]
+
+
+def test_cascade_across_aggregates_is_an_architectural_warning(model):
+    """Ordine e Pagamento sono aggregati diversi: annullare l'ordine che annulla il pagamento nello stesso passo è una
+    transazione distribuita. Dentro lo stesso aggregato (riga composta nell'ordine) non lo è."""
+    _order_with_lines(model, lines=1)
+    model.entity("Payment", ["NEW", "VOID"], initial="NEW", final=["VOID"])
+    model.transition("Payment", "NEW", "VOID", "void", cascade_only=True)
+    cancel = next(t for e in model.m["entities"] if e["name"] == "Order" for t in e["transitions"] if t["action"] == "cancel")
+    cancel["effects"].append({"id": 999, "transition_id": cancel["id"], "entity_id": model.eid("Payment"), "kind": "state",
+                              "to_state_id": model.s("Payment", "VOID"), "action": "", "skip_final": 0, "description": ""})
+    found = [i for i in Engine(model.m, "en").analyze()["issues"] if i.get("code") == "a.cross_aggregate"]
+    assert [(i["transition_id"], i["aggregates"], i["severity"]) for i in found] == [(cancel["id"], ["Order", "Payment"], "warning")]
+
+
+# ---------------------------------------------------------------- attributi ed espressioni
+
+def _attr(model, entity, name, type_, initial, **domain):
+    e = next(x for x in model.m["entities"] if x["name"] == entity)
+    e["attributes"].append({"id": model._next(), "entity_id": e["id"], "name": name, "type": type_, "required": 0,
+                            "description": "", "verify": 1, "domain": domain, "initial": initial})
+
+
+def _refund_model(model, guarded=True):
+    """Un rimborso non deve superare l'incassato: la guardia su «pay» lo impedisce, l'invariante lo verifica."""
+    model.entity("Payment", ["NEW", "CAPTURED"], initial="NEW", final=["CAPTURED"])
+    model.entity("Refund", ["DRAFT", "REQUESTED", "PAID"], initial="DRAFT", final=["PAID"])
+    _attr(model, "Payment", "captured", "int", 0, min=0, max=3)
+    _attr(model, "Refund", "amount", "int", 0, min=0, max=3)
+    model.transition("Payment", "NEW", "CAPTURED", "capture",
+                     effects=[{"entity_id": model.eid("Payment"), "kind": "set", "action": "captured", "expr": "2"}])
+    for name, value in (("small", "1"), ("big", "3")):
+        model.transition("Refund", "DRAFT", "REQUESTED", name,
+                         effects=[{"entity_id": model.eid("Refund"), "kind": "set", "action": "amount", "expr": value}])
+    model.transition("Refund", "REQUESTED", "PAID", "pay",
+                     guards=[{"kind": "expr", "description": "amount <= Payment.captured", "entity_id": None, "state_ids": []}]
+                     if guarded else [])
+    model.m["invariants"].append({"id": 950, "name": "Refund above captured", "description": "", "severity": "error",
+                                  "rules": [{"entity_id": model.eid("Refund"), "state_ids": [model.s("Refund", "PAID")], "negate": 0}],
+                                  "expr": "Refund.amount > Payment.captured"})
+
+
+def test_attribute_guard_prevents_what_the_invariant_forbids(model):
+    _refund_model(model, guarded=True)
+    r = Engine(model.m, "en").analyze()
+    assert not [i for i in r["issues"] if i["category"] in ("invariants", "expressions")]
+    assert next(x for x in r["certificate"]["rows"] if x["key"] == "attributes")["status"] == "ok"
+
+
+def test_attribute_invariant_is_violated_without_the_guard(model):
+    from tests.conftest import Model
+    _refund_model(model, guarded=False)
+    eng = Engine(model.m, "en")
+    v = next(i for i in eng.analyze()["issues"] if i.get("code") == "a.violable")
+    assert len(v["trace"]) == 2 and v["trace"][-1]["action"] == "pay"  # rimborso chiesto e pagato senza incasso
+    st = eng.initial_state()
+    for s in v["trace"]:
+        st = eng.apply(st, s["transition_id"])["state"]
+    assert eng.violations(st)
+
+    bad = Model()
+    _refund_model(bad, guarded=True)
+    pay = next(t for e in bad.m["entities"] for t in e["transitions"] if t["action"] == "pay")
+    pay["guards"][0]["description"] = "amount <= Payment.missing"
+    issue = next(i for i in Engine(bad.m, "en").analyze()["issues"] if i.get("code") == "a.bad_expr")
+    assert "missing" in issue["detail"]
+
+
+# ---------------------------------------------------------------- messaggi asincroni
+
+def _shop(model, deferred=True, max_in_flight=2, delivery="exactly_once"):
+    """Pagare l'ordine manda un messaggio alla spedizione; annullare l'ordine annulla la spedizione subito."""
+    model.m.update(max_in_flight=max_in_flight, delivery=delivery)
+    model.entity("Order", ["OPEN", "PAID", "CANCELLED"], initial="OPEN", final=["CANCELLED"])
+    model.entity("Shipment", ["NEW", "READY", "CANCELLED"], initial="NEW", final=["CANCELLED"])
+    model.transition("Shipment", "NEW", "READY", "prepare", cascade_only=True)
+    model.transition("Shipment", "NEW", "CANCELLED", "cancel", cascade_only=True)
+    model.transition("Shipment", "READY", "CANCELLED", "cancel", cascade_only=True)
+    pay = model.transition("Order", "OPEN", "PAID", "pay", effects=[
+        {"entity_id": model.eid("Shipment"), "to_state_id": model.s("Shipment", "READY"), "deferred": int(deferred)}])
+    model.transition("Order", "PAID", "CANCELLED", "cancel", effects=[
+        {"entity_id": model.eid("Shipment"), "to_state_id": model.s("Shipment", "CANCELLED"), "skip_final": 1}])
+    return pay
+
+
+def test_async_message_can_arrive_after_a_cancellation(model):
+    from tests.conftest import Model
+    pay = _shop(model)
+    eng = Engine(model.m, "en")
+    r = eng.analyze()
+    late = [i for i in r["issues"] if i["category"] == "effect_conflict"]
+    assert late and [s.get("message") is not None for s in late[0]["trace"]] == [False, False]
+    assert late[0]["state"]["_q"] and late[0]["replayable"]
+    # il percorso fino allo stato del conflitto si rigioca, consegna compresa, e lì la consegna fallisce
+    st = eng.replay(late[0]["trace"])["state"]
+    assert not eng.deliver(st, st["_q"][0])["ok"]
+    # pagare manda un evento: niente transazione atomica su due aggregati
+    assert not [i for i in r["issues"] if i.get("code") == "a.cross_aggregate" and i["transition_id"] == pay]
+    assert next(x for x in r["certificate"]["rows"] if x["key"] == "messages")["status"] == "ok"
+
+    sync = Model()
+    _shop(sync, deferred=False)
+    issues = Engine(sync.m, "en").analyze()["issues"]
+    assert not [i for i in issues if i["category"] == "effect_conflict"]  # in modo sincrono la corsa non esiste
+    assert [i for i in issues if i.get("code") == "a.cross_aggregate"]
+
+
+@pytest.mark.parametrize("delivery", ["exactly_once", "at_least_once", "at_most_once"])
+def test_delivery_guarantees_change_what_can_happen(model, delivery):
+    _shop(model, delivery=delivery)
+    eng = Engine(model.m, "en")
+    st = eng.apply(eng.initial_state(), next(t["id"] for t in model.m["entities"][0]["transitions"] if t["action"] == "pay"))["state"]
+    variants = {m["variant"] for m in eng.evaluate(st)["messages"]}
+    assert variants == {"deliver"} | ({"duplicate"} if delivery == "at_least_once" else {"lose"} if delivery == "at_most_once" else set())
+    lost = eng.deliver(st, st["_q"][0], "lose")
+    assert lost["ok"] == (delivery == "at_most_once")
+
+
+def test_full_queue_is_a_limit_of_the_model(model):
+    _shop(model, max_in_flight=1)
+    pay = next(t for t in model.m["entities"][0]["transitions"] if t["action"] == "pay")
+    model.transition("Order", "PAID", "PAID", "remind", effects=[
+        {"entity_id": model.eid("Shipment"), "to_state_id": model.s("Shipment", "READY"), "deferred": 1}])
+    r = Engine(model.m, "en").analyze()
+    row = next(x for x in r["certificate"]["rows"] if x["key"] == "messages")
+    assert row["status"] == "limit" and pay["id"]
+    assert not [i for i in r["issues"] if "in flight" in (i.get("detail") or "")]
+
+
+# ---------------------------------------------------------------- proprietà temporali
+
+def _delivery_flow(model, lost=True):
+    """Ordine pagato, che può essere messo in attesa e ripreso (un ciclo innocuo) e, se lost, perso senza ritorno."""
+    model.entity("Order", ["OPEN", "PAID", "ON_HOLD", "LOST", "DONE"], initial="OPEN", final=["DONE"])
+    model.transition("Order", "OPEN", "PAID", "pay")
+    model.transition("Order", "PAID", "ON_HOLD", "hold")
+    model.transition("Order", "ON_HOLD", "PAID", "resume")
+    model.transition("Order", "PAID", "DONE", "deliver")
+    if lost:
+        model.transition("Order", "PAID", "LOST", "lose")
+    rule = lambda s: [{"entity_id": model.eid("Order"), "state_ids": [model.s("Order", s)], "negate": 0}]
+    return rule
+
+
+@pytest.mark.parametrize("lost", [True, False])
+def test_always_possible_finds_states_with_no_way_to_the_goal(model, lost):
+    rule = _delivery_flow(model, lost)
+    eng = Engine(model.m, "en")
+    res = eng.check_expectation({"kind": "always", "rules": rule("DONE")})
+    assert res["ok"] == (not lost)
+    if lost:
+        assert [s["action"] for s in res["trace"]] == ["pay", "lose"]
+
+
+@pytest.mark.parametrize("lost", [True, False])
+def test_leads_to_holds_under_fairness_despite_harmless_cycles(model, lost):
+    """Pagato ⇒ prima o poi consegnato: il ciclo attesa/ripresa non lo rompe (equità), la perdita sì."""
+    rule = _delivery_flow(model, lost)
+    eng = Engine(model.m, "en")
+    res = eng.check_expectation({"kind": "leads_to", "rules": rule("PAID"), "target": rule("DONE")})
+    assert res["ok"] == (not lost)
+    if lost:
+        assert [s["action"] for s in res["trace"]] == ["pay", "lose"] and res["trigger_at"] == 1
+        st = eng.replay(res["trace"])["state"]
+        assert st[model.eid("Order")] == model.s("Order", "LOST")
+
+
+def test_attributes_of_multiple_instances_are_symmetric(model):
+    """Ogni riga ha la sua quantità: le copie si scambiano con i loro attributi, risultati identici."""
+    from tests.equivalence import compare
+    _order_with_lines(model, lines=3)
+    _attr(model, "Line", "qty", "int", 0, min=0, max=2)
+    model.transition("Line", "DRAFT", "DRAFT", "more", guards=[{"kind": "expr", "description": "qty < 2", "entity_id": None,
+                                                                "state_ids": []}],
+                     effects=[{"entity_id": model.eid("Line"), "kind": "set", "action": "qty", "expr": "qty + 1"}])
+    c = compare(model.m)
+    assert c["symmetry"] and all(c["equal"].values()) and c["unreplayable"] == []

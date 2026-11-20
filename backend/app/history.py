@@ -58,7 +58,8 @@ def _rows(m: dict) -> dict[str, list[dict]]:
 
 def _write(conn, domain_id: int, m: dict) -> None:
     """Sostituisce il contenuto del dominio con il modello m, conservando gli id."""
-    conn.execute("UPDATE domains SET name=?, description=? WHERE id=?", (m["name"], m.get("description", ""), domain_id))
+    conn.execute("UPDATE domains SET name=?, description=?, max_in_flight=?, delivery=? WHERE id=?",
+                 (m["name"], m.get("description", ""), m.get("max_in_flight", 2), m.get("delivery", "exactly_once"), domain_id))
     conn.execute("DELETE FROM invariants WHERE domain_id=?", (domain_id,))
     conn.execute("DELETE FROM relations WHERE domain_id=?", (domain_id,))
     conn.execute("DELETE FROM entities WHERE domain_id=?", (domain_id,))  # a cascata: stati, azioni, guardie, effetti

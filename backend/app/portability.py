@@ -7,7 +7,8 @@ from .relations import legacy_gone_states
 def import_model(conn, m: dict, default_name: str = "") -> int:
     """Inserisce un modello (formato di load_model) rimappando tutti gli id."""
     did = db.insert(conn, "domains", {"name": m.get("name") or default_name,
-                                      "description": m.get("description", "")})
+                                      "description": m.get("description", ""),
+                                      "max_in_flight": m.get("max_in_flight", 2), "delivery": m.get("delivery", "exactly_once")})
     E, S, T, F = {}, {}, {}, {}
     # vita degli stati: formato 3 "liveness"; formato 2 "is_gone" (1 = eliminato);
     # formato 1: gli stati "assente" erano sulle relazioni e si ricavano da lì
@@ -21,7 +22,8 @@ def import_model(conn, m: dict, default_name: str = "") -> int:
             "kind": e.get("kind", "aggregate"), "context": e.get("context", ""),
             "color": e.get("color", "indigo"), "pos": e.get("pos", i)})
         for a in e.get("attributes", []):
-            db.insert(conn, "attributes", {**{k: a[k] for k in ("name", "type", "required", "description") if k in a},
+            db.insert(conn, "attributes", {**{k: a[k] for k in ("name", "type", "required", "description", "verify", "domain", "initial")
+                                              if k in a},
                                            "entity_id": E[e["id"]]})
         for j, s in enumerate(e.get("states", [])):
             S[s["id"]] = db.insert(conn, "states", {
@@ -50,7 +52,8 @@ def import_model(conn, m: dict, default_name: str = "") -> int:
                 F[f["id"]] = db.insert(conn, "effects", {
                     "transition_id": T[t["id"]], "entity_id": E[f["entity_id"]], "kind": f.get("kind", "state"), "action": f.get("action", ""), "skip_final": f.get("skip_final", 0),
                     "to_state_id": S.get(f["to_state_id"]) or None, "description": f.get("description", ""),
-                    "sources": None if sources is None else [S[x] for x in sources if x in S]})
+                    "sources": None if sources is None else [S[x] for x in sources if x in S], "expr": f.get("expr", ""),
+                    "deferred": f.get("deferred", 0)})
     # transizioni generate dagli effetti: si ricollegano al nuovo id dell'effetto, poi si riallineano
     for e in m["entities"]:
         for t in e.get("transitions", []):
@@ -69,7 +72,7 @@ def import_model(conn, m: dict, default_name: str = "") -> int:
     for inv in m.get("invariants", []):
         db.insert(conn, "invariants", {
             "domain_id": did, "name": inv["name"], "description": inv.get("description", ""),
-            "severity": inv.get("severity", "error"),
+            "severity": inv.get("severity", "error"), "expr": inv.get("expr", ""),
             "rules": [{"entity_id": E[r["entity_id"]], "state_ids": [S[x] for x in r.get("state_ids", []) if x in S],
                        "negate": r.get("negate", 0)} for r in inv.get("rules", []) if r.get("entity_id") in E]})
     for x in m.get("expectations", []):
@@ -78,8 +81,11 @@ def import_model(conn, m: dict, default_name: str = "") -> int:
             "kind": x.get("kind", "goal"), "expect": x.get("expect", "possible"),
             "rules": [{"entity_id": E[r["entity_id"]], "state_ids": [S[s] for s in r.get("state_ids", []) if s in S],
                        "negate": r.get("negate", 0)} for r in x.get("rules", []) if r.get("entity_id") in E],
-            "trace": [{**s, "transition_id": T[s["transition_id"]], "entity_id": E.get(s.get("entity_id"))}
-                      for s in x.get("trace", []) if s.get("transition_id") in T]})
+            "target": [{"entity_id": E[r["entity_id"]], "state_ids": [S[s] for s in r.get("state_ids", []) if s in S],
+                        "negate": r.get("negate", 0)} for r in x.get("target", []) if r.get("entity_id") in E],
+            # le consegne dei messaggi restano: il messaggio è un indice nell'ordine di azioni ed effetti, che si conserva
+            "trace": [{**s, "transition_id": T.get(s.get("transition_id")), "entity_id": E.get(s.get("entity_id"))}
+                      for s in x.get("trace", []) if s.get("transition_id") in T or s.get("message") is not None]})
     for sc in m.get("scenarios", []):
         db.insert(conn, "scenarios", {
             "domain_id": did, "name": sc["name"], "description": sc.get("description", ""),
@@ -127,6 +133,8 @@ def export_markdown(m: dict, lang: str | None = None) -> str:
                 for g in tr["guards"]:
                     if g["kind"] == "rule":
                         gs.append(t("md.rule", text=g["description"]))
+                    elif g["kind"] == "expr":
+                        gs.append(f"`{g['description']}`")
                     else:
                         op = "∉" if g["negate"] else "∈"
                         alt = g.get("alt_group") or 0
@@ -136,6 +144,7 @@ def export_markdown(m: dict, lang: str | None = None) -> str:
                         prev_alt = alt
                 fx = [f"{en(f['entity_id'])} → " + (t("md.created") if f.get("kind") == "create"
                                                    else t("md.runs", action=f.get("action")) if f.get("kind") == "action"
+                                                   else f"`{f.get('action')} := {f.get('expr')}`" if f.get("kind") == "set"
                                                    else sn(f["to_state_id"]))
                       for f in tr["effects"]]
                 frm = t("md.creation") if tr.get("kind") == "create" else (

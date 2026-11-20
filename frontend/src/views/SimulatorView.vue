@@ -9,6 +9,7 @@ import Mermaid from '../components/Mermaid.vue'
 import StateChip from '../components/StateChip.vue'
 import Modal from '../components/Modal.vue'
 import Trace from '../components/Trace.vue'
+import HelpLink from '../components/HelpLink.vue'
 
 const m = computed(() => store.model)
 const ents = computed(() => m.value.entities.filter((e) => e.states.length))
@@ -21,7 +22,8 @@ const scenarios = ref([])
 const saving = ref(null)
 const busy = ref(false)
 
-const toNum = (s) => Object.fromEntries(Object.entries(s).map(([k, v]) => [Number(k), v]))
+// id delle entità come numeri; attributi ("12.5") e coda dei messaggi ("_q") restano come sono
+const toNum = (s) => Object.fromEntries(Object.entries(s).map(([k, v]) => [/^-?\d+$/.test(k) ? Number(k) : k, v]))
 
 async function evaluate() {
   const r = await api.post(`/domains/${m.value.id}/evaluate`, { state: state.value })
@@ -41,12 +43,45 @@ async function setState(eid, sid) {
   history.value.unshift({ kind: 'manual', label: t('sim.setTo', { entity: ename(eid), state: sname(sid) }), entity_id: eid, prev })
   await evaluate()
 }
+// attributi verificati: variabili dello stato con chiave "entità.attributo"
+const verifiedAttrs = (e) => (entity(e.id)?.attributes || []).filter((a) => a.verify)
+function attrValues(a) {
+  if (a.type === 'bool') return [false, true]
+  if (a.type === 'enum') return a.domain?.values || []
+  const lo = a.domain?.min ?? 0, hi = a.domain?.max ?? 0
+  return hi >= lo && hi - lo <= 1000 ? Array.from({ length: hi - lo + 1 }, (_, i) => lo + i) : []
+}
+async function setAttr(e, a, value) {
+  const prev = { ...state.value }
+  state.value = { ...state.value, [`${e.id}.${a.id}`]: value }
+  history.value.unshift({ kind: 'manual', label: t('sim.setAttr', { attr: `${e.name}.${a.name}`, value }), entity_id: e.id, prev })
+  await evaluate()
+}
 
 // voce dello storico per un'azione eseguita (r: risposta di apply, o passo del replay)
 const historyEntry = (r, a, prev) => ({
   kind: r.forced ? 'forced' : 'action', label: a.action, entity_id: a.entity_id, actor: a.actor, transition_id: a.transition_id,
+  message: a.message, variant: a.variant, // consegna di un messaggio (dal replay)
   steps: r.steps, conflicts: r.conflicts, violations: r.violations, prev,
 })
+
+// consegna (o duplica, o perde) un messaggio in volo
+async function deliverMsg(msg) {
+  busy.value = true
+  try {
+    const r = await api.post(`/domains/${m.value.id}/deliver`, { state: state.value, message: msg.message, variant: msg.variant })
+    if (!r.ok) {
+      toast(`${r.error}${r.reasons ? ': ' + r.reasons[0] : ''}`, 'error')
+      return
+    }
+    history.value.unshift({ kind: 'action', label: msg.label, message: msg.message, variant: msg.variant, steps: r.steps,
+      conflicts: r.conflicts, violations: r.violations, prev: { ...state.value } })
+    evaluation.value = r.evaluation
+    state.value = toNum(r.state)
+  } finally {
+    busy.value = false
+  }
+}
 
 async function run(a, force = false) {
   busy.value = true
@@ -97,10 +132,12 @@ async function loadScenario(id) {
 }
 // ---------- salva come test: la sequenza di azioni diventa un'aspettativa che deve continuare a funzionare ----------
 // solo azioni eseguite dallo stato iniziale: uno stato impostato a mano o un'azione forzata non sono riproducibili
-const canSaveTest = computed(() => history.value.length > 0 && history.value.every((h) => h.kind === 'action' && h.transition_id))
+const canSaveTest = computed(() => history.value.length > 0
+  && history.value.every((h) => h.kind === 'action' && (h.transition_id || h.message != null)))
 const savingTest = ref(null)
 async function saveTest() {
-  const trace = [...history.value].reverse().map((h) => ({ transition_id: h.transition_id, entity_id: h.entity_id, action: h.label }))
+  const trace = [...history.value].reverse().map((h) => ({ transition_id: h.transition_id ?? null, entity_id: h.entity_id, action: h.label,
+    ...(h.message != null ? { message: h.message, variant: h.variant } : {}) }))
   await api.post('/expectations', { domain_id: m.value.id, name: savingTest.value.name, kind: 'path', expect: 'possible', trace })
   savingTest.value = null
   toast(t('exp.testSaved'))
@@ -184,6 +221,13 @@ watch(locale, () => evaluation.value && evaluate())
                 :class="pal(e.color).soft">
           <option v-for="s in statesOf(e)" :key="s.id" :value="s.id">{{ s.virtual ? $t('sim.notExisting') : s.name }}{{ s.is_final ? `  (${$t('state.final')})` : '' }}</option>
         </select>
+        <div v-for="a in verifiedAttrs(e)" :key="a.id" class="flex items-center gap-2 mt-1.5 text-xs" @click.stop>
+          <span class="font-mono text-violet-700 w-24 truncate">{{ a.name }}</span>
+          <select :value="JSON.stringify(state[`${e.id}.${a.id}`] ?? null)" class="input !py-0.5 !text-xs font-mono flex-1"
+                  @change="(ev) => setAttr(e, a, JSON.parse(ev.target.value))">
+            <option v-for="v in attrValues(a)" :key="String(v)" :value="JSON.stringify(v)">{{ v }}</option>
+          </select>
+        </div>
         <div class="flex gap-3 mt-2 text-[11px] text-zinc-500">
           <span class="flex items-center gap-1"><span class="size-1.5 rounded-full bg-emerald-500" />{{ actions.filter((a) => a.entity_id === e.id && a.status === 'enabled').length }}</span>
           <span class="flex items-center gap-1"><span class="size-1.5 rounded-full bg-amber-500" />{{ actions.filter((a) => a.entity_id === e.id && a.status === 'conflict').length }}</span>
@@ -206,6 +250,25 @@ watch(locale, () => evaluation.value && evaluate())
           </div>
         </div>
       </TransitionGroup>
+
+      <!-- messaggi in volo: si consegnano in qualsiasi ordine (secondo la garanzia, anche duplicati o persi) -->
+      <div v-if="evaluation?.messages?.length" class="card overflow-hidden">
+        <div class="flex items-center gap-2 px-5 py-2.5 border-b border-zinc-100 bg-violet-50/60 text-sm font-semibold text-violet-900">
+          <i class="fa-solid fa-envelope fa-fw text-[13px]" /> {{ $t('sim.messages') }} <HelpLink topic="async" />
+        </div>
+        <div class="divide-y divide-zinc-100">
+          <div v-for="msg in evaluation.messages" :key="`${msg.message}-${msg.variant}`" class="flex items-center gap-3 px-5 py-2.5">
+            <span class="size-2 rounded-full" :class="msg.ok ? 'bg-emerald-500' : 'bg-amber-500'" />
+            <div class="flex-1 min-w-0">
+              <div class="text-sm">{{ msg.label }}</div>
+              <div v-if="!msg.ok" class="text-xs text-amber-800">{{ msg.reasons[0] }}</div>
+            </div>
+            <button class="btn-ghost !py-1 !text-xs" :disabled="busy || !msg.ok" @click="deliverMsg(msg)">
+              <i class="fa-solid fa-paper-plane fa-fw text-[11px]" /> {{ $t(`sim.msg.${msg.variant}`) }}
+            </button>
+          </div>
+        </div>
+      </div>
 
       <div class="flex items-center justify-between">
         <div class="inline-flex rounded-xl bg-zinc-100 p-1">

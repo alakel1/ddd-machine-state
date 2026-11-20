@@ -113,7 +113,7 @@ async function save() {
           <div class="flex items-center gap-3">
             <label class="label !mb-0">{{ $t('model.instancesLabel', { child: ename(r.target_id), parent: ename(r.source_id) }) }} <HelpLink topic="instances" /></label>
             <select v-model.number="r.instances" class="input !w-20 !py-1.5">
-              <option v-for="n in [1, 2, 3]" :key="n" :value="n">{{ n }}</option>
+              <option v-for="n in [1, 2, 3, 4, 5]" :key="n" :value="n">{{ n }}</option>
             </select>
           </div>
           <p v-if="r.instances > 1" class="text-xs text-amber-700 flex gap-1.5">

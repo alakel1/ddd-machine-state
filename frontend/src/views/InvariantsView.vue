@@ -7,6 +7,7 @@ import PageHeader from '../components/PageHeader.vue'
 import Modal from '../components/Modal.vue'
 import StateChip from '../components/StateChip.vue'
 import StatePicker from '../components/StatePicker.vue'
+import ExprInput from '../components/ExprInput.vue'
 
 const m = computed(() => store.model)
 const draft = ref(null)
@@ -14,7 +15,7 @@ const draft = ref(null)
 function open(inv) {
   draft.value = inv
     ? JSON.parse(JSON.stringify(inv))
-    : { name: '', description: '', severity: 'error', rules: [newRule(0), newRule(1)].filter(Boolean) }
+    : { name: '', description: '', severity: 'error', expr: '', rules: [newRule(0), newRule(1)].filter(Boolean) }
 }
 function newRule(i = 0) {
   const e = m.value.entities.filter((x) => x.states.length)[i]
@@ -94,6 +95,10 @@ async function remove(inv) {
                 <StateChip v-for="sid in r.state_ids" :key="sid" :id="sid" size="xs" />
               </span>
             </template>
+            <template v-if="inv.expr">
+              <span v-if="inv.rules.length" class="text-xs font-semibold text-zinc-400">{{ $t('inv.and') }}</span>
+              <span class="tag bg-violet-50 text-violet-700 ring-violet-200 font-mono"><i class="fa-solid fa-equals fa-fw text-[10px]" />{{ inv.expr }}</span>
+            </template>
           </div>
         </div>
         <div class="flex gap-0.5 opacity-0 group-hover:opacity-100 transition">
@@ -137,10 +142,15 @@ async function remove(inv) {
           </div>
         </div>
       </div>
+      <!-- condizione sugli attributi, in AND con quelle sugli stati -->
+      <div>
+        <div class="text-sm font-semibold mb-1.5">{{ $t('inv.expr') }} <span class="font-normal text-zinc-500">{{ $t('inv.exprHint') }}</span></div>
+        <ExprInput v-model="draft.expr" :placeholder="$t('expr.invariantPlaceholder')" />
+      </div>
     </form>
     <template #footer>
       <button class="btn-ghost" @click="draft = null">{{ $t('common.cancel') }}</button>
-      <button class="btn-accent" form="iform" :disabled="!draft.name || !draft.rules.some((r) => r.state_ids.length)">{{ $t('common.save') }}</button>
+      <button class="btn-accent" form="iform" :disabled="!draft.name || !(draft.rules.some((r) => r.state_ids.length) || draft.expr?.trim())">{{ $t('common.save') }}</button>
     </template>
   </Modal>
 </template>

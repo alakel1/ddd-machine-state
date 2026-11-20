@@ -10,6 +10,7 @@ import Trace from '../components/Trace.vue'
 import FixModal from '../components/FixModal.vue'
 import AckBadge from '../components/AckBadge.vue'
 import HelpLink from '../components/HelpLink.vue'
+import Certificate from '../components/Certificate.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -168,6 +169,7 @@ watch(locale, () => { run(); loadMatrix() })
         <div class="mt-1 text-3xl font-semibold tabular-nums tracking-tight">{{ bySev(s) }}</div>
       </button>
     </div>
+    <Certificate v-if="res?.certificate" :cert="res.certificate" />
 
     <div class="grid gap-8 2xl:grid-cols-[minmax(0,1fr)_minmax(0,0.9fr)]">
       <!-- ISSUE -->

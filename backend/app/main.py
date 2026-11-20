@@ -12,6 +12,7 @@ from fastapi.staticfiles import StaticFiles
 
 from . import db, editing, history
 from .engine import Engine, is_create
+from .expr import ExprError
 from .i18n import translator
 from .portability import export_markdown, import_model
 from .relations import derived_invariants, gone_states, off_states
@@ -161,6 +162,16 @@ def apply(domain_id: int, request: Request, payload: dict = Body(...)):
     return {**r, "evaluation": eng.evaluate(r["state"])} if r["ok"] else r
 
 
+@app.post("/api/domains/{domain_id}/deliver")
+def deliver(domain_id: int, request: Request, payload: dict = Body(...)):
+    """Consegna (o duplica, o perde) un messaggio in volo nel simulatore."""
+    lang = lang_of(request)
+    with db.tx() as conn:
+        eng = Engine(_model_or_404(conn, domain_id, lang), lang)
+    r = eng.deliver(payload.get("state") or {}, int(payload["message"]), payload.get("variant") or "deliver")
+    return {**r, "evaluation": eng.evaluate(r["state"])} if r["ok"] else r
+
+
 @app.post("/api/domains/{domain_id}/fix")
 def apply_fix(domain_id: int, request: Request, payload: dict = Body(...)):
     """Applica una soluzione proposta dall'analisi ("Risolvi"): operazioni in una sola transazione."""
@@ -224,6 +235,9 @@ def analysis(domain_id: int, request: Request):
         expectations = _expectations(conn, domain_id)
     result = eng.analyze()
     result["issues"] = _expectation_issues(eng, expectations) + result["issues"]
+    # il certificato conta anche le aspettative non rispettate, come i numeri della pagina
+    cert = result["certificate"]
+    cert["headline"] = eng.headline(cert["verdict"], sum(1 for i in result["issues"] if i["severity"] == "error"))
     # segnalazioni accettate o rimandate; "stale" se la parte di modello coinvolta è cambiata da allora
     for i in result["issues"]:
         a = acks.get(i["fingerprint"])
@@ -243,9 +257,14 @@ def _expectation_issues(eng: Engine, expectations: list[dict]) -> list[dict]:
         res = eng.check_expectation(x)
         if res["ok"]:
             continue
+        cond = lambda rules: "; ".join(eng._guard_text({"kind": "state", **r}) for r in rules or ())
         if x["kind"] == "goal":
             ents = [r["entity_id"] for r in x["rules"]]
-            detail = eng.t("x.goal_unreachable", goal="; ".join(eng._guard_text({"kind": "state", **r}) for r in x["rules"]))
+            detail = eng.t("x.goal_unreachable", goal=cond(x["rules"]))
+        elif x["kind"] in ("always", "leads_to"):
+            # proprietà temporale: il controesempio è un percorso fino allo stato da cui l'obiettivo non si raggiunge più
+            ents = [r["entity_id"] for r in (x.get("rules") or []) + (x.get("target") or [])]
+            detail = eng.t(f"x.{x['kind']}_broken", goal=cond(x["rules"]), target=cond(x.get("target")), n=len(res.get("trace") or []))
         else:
             ents = sorted({s["entity_id"] for s in x["trace"] if s.get("entity_id")})
             detail = (eng.t("x.path_blocked", n=res["done"] + 1, action=res["failed"] or "?", reason=res["reason"] or "")
@@ -253,6 +272,8 @@ def _expectation_issues(eng: Engine, expectations: list[dict]) -> list[dict]:
         out.append({"severity": "error", "category": "expectations", "code": f"x.{x['kind']}",
                     "title": eng.t("x.failed", name=x["name"]), "detail": detail, "expectation_id": x["id"],
                     "entity_id": ents[0] if ents else None, "entity_ids": sorted(set(ents)), "fixes": [],
+                    # controesempio di una proprietà temporale: si rigioca nel simulatore
+                    **({"trace": res["trace"], "state": res["state"], "replayable": True} if res.get("trace") else {}),
                     "fingerprint": f"x{x['id']}", "context": hashlib.sha1(json.dumps(res, default=str).encode()).hexdigest()[:16],
                     "cause": {"key": f"expectation:{x['id']}", "title": eng.t("x.failed", name=x["name"])}})
     return out
@@ -286,6 +307,20 @@ def delete_ack(domain_id: int, fingerprint: str):
     with db.tx() as conn:
         conn.execute("DELETE FROM acks WHERE domain_id=? AND fingerprint=?", (domain_id, fingerprint))
     return {"ok": True}
+
+
+@app.post("/api/domains/{domain_id}/expr/check")
+def check_expr(domain_id: int, request: Request, payload: dict = Body(...)):
+    """Un'espressione sugli attributi è valida? payload: {text, entity_id (contesto, per gli attributi senza
+    entità)}. Ritorna {ok, error, reads: ["Entità.attributo"]}."""
+    lang = lang_of(request)
+    with db.tx() as conn:
+        eng = Engine(_model_or_404(conn, domain_id, lang), lang)
+    try:
+        _, reads, _ = eng._compile(payload.get("text") or "", payload.get("entity_id"), None)
+    except ExprError as exc:
+        return {"ok": False, "error": str(exc)}
+    return {"ok": True, "reads": [eng._var_name(k) for k in reads]}
 
 
 @app.post("/api/domains/{domain_id}/effect-sources")

@@ -49,7 +49,8 @@ def unreplayable(eng: Engine, r: dict) -> list[str]:
                 break
             st = res["state"]
         else:
-            if {int(k): v for k, v in st.items()} != {int(k): v for k, v in i["state"].items()}:
+            norm = lambda s: {(k if "." in str(k) else int(k)): v for k, v in s.items()}  # chiavi JSON → id e attributi
+            if norm(st) != norm(i["state"]):
                 bad.append(i["title"])
     return bad
 

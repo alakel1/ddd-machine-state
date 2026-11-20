@@ -91,6 +91,26 @@
       "body": "What an action does to other entities: move them to a state, make them run an action by name, or create them. Each effect must find on the child a transition that exists and whose guards pass: if it does not, the cascade is blocked.",
       "example": "Order “cancel” → Payment to CANCELLED (the Payment needs a transition to CANCELLED)."
     },
+    "async": {
+      "title": "Asynchronous effects (events)",
+      "body": "An effect marked “asynchronous” does not happen in the same step as the action: a message is sent and delivered in a later step, in any order with respect to the other actions and messages. This way the analysis finds the races of eventual consistency. For the domain you choose how many messages can be in flight together and the delivery guarantee: exactly once, at least once (a message can arrive twice) or at most once (it can get lost). An asynchronous effect does not count as a transaction over several aggregates. In the simulator, messages in flight are delivered by hand.",
+      "example": "Order “pay” → message to Shipment: READY. If the order is cancelled in the meantime, the message reaches an already cancelled shipment: the analysis finds it."
+    },
+    "attributes": {
+      "title": "Verified attributes and expressions",
+      "body": "A boolean, integer (with minimum and maximum) or enumerated attribute can take part in the analysis: turn on “verify”, choose the domain and the initial value. Then use it in “condition” guards (amount <= Payment.captured), “sets attribute” effects (qty := qty + 1) and invariants. Syntax: comparisons, and / or / not, + - *, numbers, true / false, quoted texts; the own entity's attribute is written alone, another one's Entity.attribute or [Name with spaces].attribute. Expressions are interpreted by the tool, not executed: no arbitrary code. Every possible value is one more state to explore: keep domains small.",
+      "example": "Refund “pay” with the condition amount <= Payment.captured; invariant: Refund PAID and Refund.amount > Payment.captured."
+    },
+    "temporal": {
+      "title": "Properties over time",
+      "body": "Besides “reachable at least once”, an expectation can say “always still reachable” (however you get anywhere, the goal stays reachable: no business dead end) or “whenever P, eventually Q” (eventual consistency). The latter is checked assuming fairness: no possible action is ignored forever, so a harmless cycle (hold and resume) does not break it, while a state from which Q can no longer be reached does. The counterexample is a concrete path, to replay in the simulator.",
+      "example": "Whenever Order is PAID, eventually Shipment is DELIVERED: broken if a LOST shipment has no way out."
+    },
+    "certificate": {
+      "title": "Verification certificate",
+      "body": "It says what the analysis really proves: complete (every state of the bounded model explored), incomplete (stopped by the state, time or memory limit, or cascades too long to follow to the end) or not verifiable. It lists the dimensions of the bounded model (instances, symmetry used) and the assumptions: text rules taken as always true, time and messages not modelled. A “no errors” holds for the bounded model, it is not a guarantee on the real system.",
+      "example": "“Complete verification of the bounded model: no errors found” with 2 Lines per Order says nothing about orders with 10 lines."
+    },
     "effectSources": {
       "title": "Effects that create the child's transitions",
       "body": "On a “moves to state” effect you choose which states of the child it must work from: the tool creates the missing cascade-only transitions, named after the action that needs them, and removes them when they are no longer needed. The cascade is declared in one place. The suggested states are those the child is actually in when the action can run.",
@@ -118,7 +138,7 @@
     },
     "instances": {
       "title": "Multiple instances",
-      "body": "On a composition you can ask the analysis to simulate 2-3 children per parent (#1, #2), to find cases like “one child confirmed and the other deleted”. Each parent copy has its own child copies. The simulator stays at one instance.",
+      "body": "On a composition you can ask the analysis to simulate 2 to 5 children for each parent (#1, #2…), to find cases like “one child confirmed and the other deleted”. Each parent copy has its own children: with 2 Phases and 3 Functions per Phase, there are 6 Functions. Sibling copies are interchangeable: the analysis checks it and explores them once per class, with the same results. The simulator stays at one instance.",
       "example": "Order with 2 Lines: the analysis also explores Line #1 SHIPPED with Line #2 CANCELLED."
     },
     "invariants": {
@@ -186,6 +206,42 @@
     "openHint": "The causes still open found by the edge case analysis (accepted ones excluded).",
     "noOpen": "No open points."
   },
+  "expr": {
+    "placeholder": "e.g. amount <= Payment.captured",
+    "guardPlaceholder": "e.g. amount <= Payment.captured",
+    "setPlaceholder": "e.g. amount + 1",
+    "invariantPlaceholder": "e.g. Refund.amount > Payment.captured",
+    "condition": "condition",
+    "reads": "reads {list}"
+  },
+  "attr": {
+    "verify": "verify",
+    "verifyHint": "The attribute takes part in the analysis: pick a finite domain and an initial value, and use it in conditions, assignments and invariants.",
+    "min": "minimum",
+    "max": "maximum",
+    "values": "values, comma separated",
+    "initial": "initial value"
+  },
+  "cert": {
+    "title": "Certificate",
+    "show": "details",
+    "hide": "close",
+    "dimensions": "Bounded model and assumptions",
+    "row": {
+      "exploration": "Exploration",
+      "instances": "Instances",
+      "symmetry": "Symmetry",
+      "cascades": "Cascades",
+      "rules": "Text rules",
+      "attributes": "Attributes",
+      "time": "Time",
+      "messages": "Messages"
+    },
+    "mode": {
+      "full": "Full exploration: what is guaranteed",
+      "symmetry": "Exploration with symmetry: what is guaranteed"
+    }
+  },
   "actions": {
     "eyebrow": "Cascades",
     "title": "Actions",
@@ -204,6 +260,13 @@
     "covered": "Transition added",
     "noTarget": "No action of the child matches this effect.",
     "noEffects": "No effects.",
+    "async": "Asynchronous messages",
+    "inFlight": "in flight at most",
+    "delivery": {
+      "exactly_once": "delivered exactly once",
+      "at_least_once": "at least once (duplicates)",
+      "at_most_once": "at most once (losses)"
+    },
     "effectsOf": "Effects of “{action}” ({entity})"
   },
   "exp": {
@@ -216,6 +279,20 @@
     "empty": "No expectations yet. Add a goal (“it must be possible to reach Order DELIVERED”) or, from the simulator, save as a test a sequence of actions that must keep working.",
     "summary": "expectations met",
     "goal": "Goal",
+    "kindLabel": "Type",
+    "kinds": {
+      "goal": "Reachable (at least once)",
+      "always": "Always still reachable",
+      "leads_to": "Whenever… eventually…"
+    },
+    "alwaysReach": "From every state it must be possible to reach",
+    "whenever": "Whenever",
+    "eventually": "Eventually",
+    "alwaysOk": "From every reachable state it can still be reached.",
+    "leads_toOk": "Met: after every occurrence it is always reached (assuming no possible action is ignored forever).",
+    "vacuous": "Met, but the “whenever” condition never happens.",
+    "alwaysBroken": "With this path you reach a state from which it can no longer be reached:",
+    "leads_toBroken": "With this path, after the condition and without ever meeting the goal, you get where it can no longer be reached:",
     "path": {
       "possible": "Path that must work",
       "blocked": "Path that must stay blocked"
@@ -464,6 +541,8 @@
     "descriptionPlaceholder": "Why it is forbidden",
     "conditions": "Conditions",
     "conditionsHint": "(all true ⇒ violation)",
+    "expr": "Condition on attributes",
+    "exprHint": "(optional, ANDed with the conditions on states)",
     "condition": "condition",
     "inOneOf": "is in one of",
     "inNoneOf": "is in none of"
@@ -497,6 +576,13 @@
     "forced": "forced",
     "backHere": "back to here",
     "setTo": "{entity} set to {state}",
+    "setAttr": "{attr} set to {value}",
+    "messages": "Messages in flight",
+    "msg": {
+      "deliver": "deliver",
+      "duplicate": "deliver and keep",
+      "lose": "lose"
+    },
     "scenarioLoaded": "Scenario “{name}” loaded",
     "scenarioSaved": "Scenario saved",
     "saveScenario": "Save scenario",
@@ -532,7 +618,9 @@
       "dead_actions": "dead actions",
       "composition": "composition",
       "relations": "relations",
-      "liveness": "state liveness"
+      "liveness": "state liveness",
+      "architecture": "aggregate boundaries",
+      "expressions": "expressions"
     },
     "noIssues": "No problems found with these filters.",
     "view": {
@@ -654,6 +742,9 @@
     "effect": {
       "add": "effect",
       "toState": "moves to state",
+      "setAttr": "sets attribute",
+      "deferred": "asynchronous",
+      "deferredHint": "Event: the effect does not happen in the same step but as a message, delivered later, in any order with respect to the other actions.",
       "runsAction": "runs the action",
       "created": "is created",
       "runs": "runs “{action}”",

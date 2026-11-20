@@ -3,14 +3,15 @@ import { entity, ename, sname } from './store'
 import { t } from './i18n'
 
 export const guardText = (g) =>
-  g.kind === 'rule'
+  g.kind === 'rule' || g.kind === 'expr'
     ? g.description
     : `${ename(g.entity_id)} ${g.negate ? '∉' : '∈'} {${g.state_ids.map(sname).join(', ')}}` +
       (g.each_entity_id ? `, ${t('entity.eachText', { entity: ename(g.each_entity_id) })}` : '')
 
 export const effectText = (f) =>
-  (f.kind === 'create' ? t('entity.effect.created') : f.kind === 'action' ? t('entity.effect.runs', { action: f.action }) : sname(f.to_state_id)) +
-  (f.skip_final ? ` ${t('entity.effect.activeOnly')}` : '')
+  (f.kind === 'create' ? t('entity.effect.created') : f.kind === 'action' ? t('entity.effect.runs', { action: f.action })
+    : f.kind === 'set' ? `${f.action} := ${f.expr}` : sname(f.to_state_id)) +
+  (f.skip_final ? ` ${t('entity.effect.activeOnly')}` : '') + (f.deferred ? ` ✉ ${t('entity.effect.deferred')}` : '')
 
 // transizioni del figlio che un effetto può far eseguire (per la pagina Azioni)
 export function effectTargets(f) {

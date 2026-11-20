@@ -108,7 +108,9 @@ def _clean_effect(f: dict) -> dict:
     sources = f.get("sources")
     return {**f, "kind": kind,
             "to_state_id": f.get("to_state_id") if kind == "state" else None,
-            "action": (f.get("action") or "").strip() if kind == "action" else "",
+            # per "set" action è il nome dell'attributo da impostare, expr il valore
+            "action": (f.get("action") or "").strip() if kind in ("action", "set") else "",
+            "expr": (f.get("expr") or "").strip() if kind == "set" else "",
             "sources": [int(s) for s in sources] if kind == "state" and sources is not None else None}
 
 

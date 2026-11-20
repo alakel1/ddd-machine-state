@@ -3,7 +3,7 @@
 // tolgono effetti, e si coprono gli stati da cui un effetto non ha ancora una transizione
 import { computed, provide, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { store, api, mutate, entity, sname, toast } from '../store'
+import { store, api, mutate, reloadModel, entity, sname, toast } from '../store'
 import { pal } from '../colors'
 import { t } from '../i18n'
 import { effectTargets, fromOf } from '../texts'
@@ -86,6 +86,10 @@ async function save() {
   toast(t('entity.actionSaved'))
 }
 provide('cascade', { uncovered, cover, edit })
+async function saveDomain(patch) {
+  await api.put(`/domains/${m.value.id}`, patch)
+  await reloadModel()
+}
 </script>
 
 <template>
@@ -94,6 +98,18 @@ provide('cascade', { uncovered, cover, edit })
   </PageHeader>
   <div class="p-8 grid gap-6 lg:grid-cols-[18rem_minmax(0,1fr)] items-start">
     <aside class="card p-3 space-y-3 lg:sticky lg:top-32 max-h-[calc(100vh-10rem)] overflow-y-auto">
+      <!-- effetti asincroni del dominio: quanti messaggi in volo e con quale garanzia di consegna -->
+      <div class="rounded-xl bg-violet-50/60 ring-1 ring-violet-100 p-2.5 space-y-1.5 text-xs">
+        <div class="font-semibold text-violet-900 flex items-center gap-1.5"><i class="fa-solid fa-envelope" /> {{ $t('actions.async') }} <HelpLink topic="async" /></div>
+        <label class="flex items-center justify-between gap-2 text-zinc-600">{{ $t('actions.inFlight') }}
+          <select :value="m.max_in_flight ?? 2" class="input !w-16 !py-0.5 !text-xs" @change="(ev) => saveDomain({ max_in_flight: Number(ev.target.value) })">
+            <option v-for="n in [1, 2, 3]" :key="n" :value="n">{{ n }}</option>
+          </select>
+        </label>
+        <select :value="m.delivery || 'exactly_once'" class="input !py-0.5 !text-xs w-full" @change="(ev) => saveDomain({ delivery: ev.target.value })">
+          <option v-for="d in ['exactly_once', 'at_least_once', 'at_most_once']" :key="d" :value="d">{{ $t(`actions.delivery.${d}`) }}</option>
+        </select>
+      </div>
       <input v-model="query" class="input !py-1.5" :placeholder="$t('actions.search')" />
       <label class="flex items-center gap-2 text-xs text-zinc-600 px-1 cursor-pointer">
         <input v-model="showCascade" type="checkbox" class="accent-indigo-600" /> {{ $t('actions.showCascade') }}

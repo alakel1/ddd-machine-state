@@ -9,8 +9,9 @@ import { t, locale } from '../i18n'
 import PageHeader from '../components/PageHeader.vue'
 import Modal from '../components/Modal.vue'
 import StateChip from '../components/StateChip.vue'
-import StatePicker from '../components/StatePicker.vue'
 import Trace from '../components/Trace.vue'
+import ConditionsEditor from '../components/ConditionsEditor.vue'
+import HelpLink from '../components/HelpLink.vue'
 
 const router = useRouter()
 const m = computed(() => store.model)
@@ -36,12 +37,14 @@ function newRule(i = 0) {
   return e ? { entity_id: e.id, state_ids: [], negate: 0 } : null
 }
 function open(x) {
-  draft.value = x ? JSON.parse(JSON.stringify(x)) : { kind: 'goal', name: '', description: '', expect: 'possible', rules: [newRule(0)].filter(Boolean), trace: [] }
+  draft.value = x ? { target: [], ...JSON.parse(JSON.stringify(x)) }
+    : { kind: 'goal', name: '', description: '', expect: 'possible', rules: [newRule(0)].filter(Boolean), target: [newRule(0)].filter(Boolean), trace: [] }
 }
 async function save() {
   const d = draft.value
   const body = { domain_id: m.value.id, name: d.name, description: d.description, kind: d.kind, expect: d.expect,
-    rules: (d.rules || []).filter((r) => r.state_ids.length), trace: d.trace || [] }
+    rules: (d.rules || []).filter((r) => r.state_ids.length), trace: d.trace || [],
+    target: d.kind === 'leads_to' ? (d.target || []).filter((r) => r.state_ids.length) : [] }
   if (d.id) await api.put(`/expectations/${d.id}`, body)
   else await api.post('/expectations', body)
   draft.value = null
@@ -92,24 +95,27 @@ function replay(trace) {
             <div class="flex items-center gap-2 flex-wrap">
               <h3 class="font-semibold tracking-tight">{{ x.name }}</h3>
               <span class="tag bg-zinc-50 text-zinc-500 ring-zinc-200">
-                <i class="fa-solid" :class="x.kind === 'goal' ? 'fa-bullseye' : 'fa-route'" />
-                {{ $t(x.kind === 'goal' ? 'exp.goal' : `exp.path.${x.expect}`) }}
+                <i class="fa-solid" :class="{ goal: 'fa-bullseye', always: 'fa-infinity', leads_to: 'fa-hourglass-half' }[x.kind] || 'fa-route'" />
+                {{ x.kind === 'path' ? $t(`exp.path.${x.expect}`) : $t(`exp.kinds.${x.kind}`) }}
               </span>
             </div>
             <p v-if="x.description" class="text-sm text-zinc-500 mt-0.5">{{ x.description }}</p>
 
-            <!-- obiettivo: la combinazione da raggiungere -->
-            <div v-if="x.kind === 'goal'" class="mt-3 flex flex-wrap items-center gap-2 text-sm">
-              <span class="text-xs font-semibold text-indigo-600 uppercase tracking-wide">{{ $t('exp.reach') }}</span>
-              <template v-for="(r, i) in x.rules" :key="i">
-                <span v-if="i" class="text-xs font-semibold text-zinc-400">{{ $t('inv.and') }}</span>
-                <span class="inline-flex items-center gap-1.5 rounded-lg bg-zinc-50 ring-1 ring-zinc-200 px-2 py-1">
-                  <span class="size-1.5 rounded-full" :class="pal(entity(r.entity_id)?.color).dot" />
-                  <span class="font-medium text-xs">{{ ename(r.entity_id) }}</span>
-                  <span class="text-xs text-zinc-400 font-mono">{{ r.negate ? '∉' : '∈' }}</span>
-                  <StateChip v-for="sid in r.state_ids" :key="sid" :id="sid" size="xs" />
-                </span>
-              </template>
+            <!-- obiettivo e proprietà temporali: le combinazioni di stati (per "prima o poi" anche la seconda) -->
+            <div v-if="x.kind !== 'path'" class="mt-3 space-y-1.5 text-sm">
+              <div v-for="part in x.kind === 'leads_to' ? [['whenever', x.rules], ['eventually', x.target]] : [[x.kind === 'always' ? 'alwaysReach' : 'reach', x.rules]]"
+                   :key="part[0]" class="flex flex-wrap items-center gap-2">
+                <span class="text-xs font-semibold text-indigo-600 uppercase tracking-wide">{{ $t(`exp.${part[0]}`) }}</span>
+                <template v-for="(r, i) in part[1]" :key="i">
+                  <span v-if="i" class="text-xs font-semibold text-zinc-400">{{ $t('inv.and') }}</span>
+                  <span class="inline-flex items-center gap-1.5 rounded-lg bg-zinc-50 ring-1 ring-zinc-200 px-2 py-1">
+                    <span class="size-1.5 rounded-full" :class="pal(entity(r.entity_id)?.color).dot" />
+                    <span class="font-medium text-xs">{{ ename(r.entity_id) }}</span>
+                    <span class="text-xs text-zinc-400 font-mono">{{ r.negate ? '∉' : '∈' }}</span>
+                    <StateChip v-for="sid in r.state_ids" :key="sid" :id="sid" size="xs" />
+                  </span>
+                </template>
+              </div>
             </div>
             <!-- percorso: la sequenza di azioni -->
             <div v-else class="mt-3"><Trace :steps="x.trace" /></div>
@@ -127,6 +133,19 @@ function replay(trace) {
                   </button>
                 </div>
                 <p v-else class="text-rose-700">{{ $t(x.result.empty ? 'exp.noConditions' : 'exp.unreachable') }}</p>
+              </template>
+              <template v-else-if="x.kind === 'always' || x.kind === 'leads_to'">
+                <p v-if="x.result.ok" class="text-emerald-700">{{ $t(x.result.vacuous ? 'exp.vacuous' : `exp.${x.kind}Ok`) }}</p>
+                <p v-else-if="x.result.empty" class="text-rose-700">{{ $t('exp.noConditions') }}</p>
+                <div v-else class="flex items-center gap-3">
+                  <div class="flex-1 min-w-0">
+                    <div class="text-rose-700 text-xs mb-1.5">{{ $t(`exp.${x.kind}Broken`) }}</div>
+                    <Trace :steps="x.result.trace" />
+                  </div>
+                  <button class="btn-outline !text-xs shrink-0" @click="replay(x.result.trace)">
+                    <i class="fa-solid fa-circle-play fa-fw text-[14px]" /> {{ $t('analysis.replay') }}
+                  </button>
+                </div>
               </template>
               <template v-else>
                 <p v-if="x.result.ok" class="text-emerald-700">{{ $t(x.expect === 'possible' ? 'exp.pathOk' : 'exp.pathBlockedOk', { n: x.result.done + 1, action: x.result.failed }) }}</p>
@@ -161,29 +180,24 @@ function replay(trace) {
           <option value="blocked">{{ $t('exp.path.blocked') }}</option>
         </select>
       </div>
-      <div v-else>
-        <div class="flex items-center justify-between mb-2">
-          <div class="text-sm font-semibold">{{ $t('exp.conditions') }} <span class="font-normal text-zinc-500">{{ $t('exp.conditionsHint') }}</span></div>
-          <button type="button" class="btn-ghost !text-xs" @click="draft.rules.push(newRule())"><i class="fa-solid fa-plus fa-fw text-[12px]" /> {{ $t('inv.condition') }}</button>
+      <template v-else>
+        <!-- tipo: raggiungibile almeno una volta, sempre ancora raggiungibile, oppure "ogni volta che… prima o poi…" -->
+        <div>
+          <label class="label">{{ $t('exp.kindLabel') }} <HelpLink topic="temporal" /></label>
+          <select v-model="draft.kind" class="input">
+            <option v-for="k in ['goal', 'always', 'leads_to']" :key="k" :value="k">{{ $t(`exp.kinds.${k}`) }}</option>
+          </select>
         </div>
-        <div class="space-y-2">
-          <div v-for="(r, i) in draft.rules" :key="i" class="rounded-xl ring-1 ring-zinc-200 p-3 bg-zinc-50/50 space-y-2.5">
-            <div class="flex items-center gap-2">
-              <span v-if="i" class="text-xs font-semibold text-zinc-400 w-5">{{ $t('inv.and') }}</span>
-              <select v-model="r.entity_id" class="input !w-48 !py-1.5" @change="r.state_ids = []">
-                <option v-for="e in m.entities.filter((e) => e.states.length)" :key="e.id" :value="e.id">{{ e.name }}</option>
-              </select>
-              <select v-model="r.negate" class="input !w-44 !py-1.5">
-                <option :value="0">{{ $t('inv.inOneOf') }}</option>
-                <option :value="1">{{ $t('inv.inNoneOf') }}</option>
-              </select>
-              <div class="flex-1" />
-              <button type="button" class="icon-btn hover:!text-rose-600" @click="draft.rules.splice(i, 1)"><i class="fa-solid fa-xmark fa-fw text-[14px]" /></button>
-            </div>
-            <StatePicker v-model="r.state_ids" :entity-id="r.entity_id" />
-          </div>
+        <div>
+          <div class="text-sm font-semibold mb-2">{{ $t(draft.kind === 'leads_to' ? 'exp.whenever' : 'exp.conditions') }}
+            <span class="font-normal text-zinc-500">{{ $t('exp.conditionsHint') }}</span></div>
+          <ConditionsEditor v-model="draft.rules" />
         </div>
-      </div>
+        <div v-if="draft.kind === 'leads_to'">
+          <div class="text-sm font-semibold mb-2">{{ $t('exp.eventually') }}</div>
+          <ConditionsEditor v-model="draft.target" />
+        </div>
+      </template>
     </form>
     <template #footer>
       <button class="btn-ghost" @click="draft = null">{{ $t('common.cancel') }}</button>

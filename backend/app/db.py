@@ -15,7 +15,10 @@ CREATE TABLE IF NOT EXISTS domains (
     id INTEGER PRIMARY KEY,
     name TEXT NOT NULL,
     description TEXT NOT NULL DEFAULT '',
-    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    -- effetti asincroni (eventi): messaggi in volo al massimo e garanzia di consegna
+    max_in_flight INTEGER NOT NULL DEFAULT 2,
+    delivery TEXT NOT NULL DEFAULT 'exactly_once'  -- exactly_once | at_least_once (duplicati) | at_most_once (perdite)
 );
 
 CREATE TABLE IF NOT EXISTS entities (
@@ -35,7 +38,11 @@ CREATE TABLE IF NOT EXISTS attributes (
     name TEXT NOT NULL,
     type TEXT NOT NULL DEFAULT 'string',
     required INTEGER NOT NULL DEFAULT 0,
-    description TEXT NOT NULL DEFAULT ''
+    description TEXT NOT NULL DEFAULT '',
+    -- partecipa all'analisi (bool, int/decimal con min-max, enum con valori): una variabile dello stato
+    verify INTEGER NOT NULL DEFAULT 0,
+    domain TEXT,   -- JSON: {"min", "max"} oppure {"values": [...]}
+    initial TEXT   -- JSON: valore iniziale
 );
 
 CREATE TABLE IF NOT EXISTS states (
@@ -95,7 +102,9 @@ CREATE TABLE IF NOT EXISTS effects (
     description TEXT NOT NULL DEFAULT '',
     -- kind=state: stati di entity_id da cui l'effetto deve funzionare (JSON); il tool genera le transizioni
     -- "solo in cascata" che mancano. NULL = le transizioni del figlio si scrivono a mano
-    sources TEXT
+    sources TEXT,
+    expr TEXT NOT NULL DEFAULT '',  -- kind=set: l'attributo `action` di entity_id prende il valore di expr
+    deferred INTEGER NOT NULL DEFAULT 0  -- 1 = asincrono: un messaggio consegnato in un passo successivo
 );
 
 CREATE TABLE IF NOT EXISTS relations (
@@ -107,7 +116,7 @@ CREATE TABLE IF NOT EXISTS relations (
     label TEXT NOT NULL DEFAULT '',
     -- composizione: target (figlio) non esiste senza source (padre); vedi relations.py per la vita degli stati
     composition INTEGER NOT NULL DEFAULT 0,
-    instances INTEGER NOT NULL DEFAULT 1            -- figli simulati per padre nell'analisi (1-3)
+    instances INTEGER NOT NULL DEFAULT 1            -- figli simulati per ogni padre nell'analisi (1-5)
 );
 
 -- combinazione di stati vietata: rules = [{entity_id, state_ids, negate}] in AND
@@ -117,7 +126,8 @@ CREATE TABLE IF NOT EXISTS invariants (
     name TEXT NOT NULL,
     description TEXT NOT NULL DEFAULT '',
     severity TEXT NOT NULL DEFAULT 'error',
-    rules TEXT NOT NULL DEFAULT '[]'
+    rules TEXT NOT NULL DEFAULT '[]',
+    expr TEXT NOT NULL DEFAULT ''  -- condizione sugli attributi, in AND con le regole (vedi expr.py)
 );
 
 CREATE TABLE IF NOT EXISTS scenarios (
@@ -164,11 +174,14 @@ CREATE TABLE IF NOT EXISTS expectations (
     domain_id INTEGER NOT NULL REFERENCES domains(id) ON DELETE CASCADE,
     name TEXT NOT NULL,
     description TEXT NOT NULL DEFAULT '',
+    -- goal (raggiungibile), path (percorso), always (sempre ancora raggiungibile), leads_to (ogni volta che rules,
+    -- prima o poi target)
     kind TEXT NOT NULL DEFAULT 'goal',
     rules TEXT NOT NULL DEFAULT '[]',
     trace TEXT NOT NULL DEFAULT '[]',
     expect TEXT NOT NULL DEFAULT 'possible',
-    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    target TEXT NOT NULL DEFAULT '[]'
 );
 """
 
@@ -176,22 +189,24 @@ SCHEMA_EFFECTS = SCHEMA[SCHEMA.index("CREATE TABLE IF NOT EXISTS effects"):SCHEM
 
 # Campi scrivibili per tabella, campi JSON e chiave padre per il CRUD generico
 TABLES = {
-    "domains": {"fields": ["name", "description"], "json": []},
+    "domains": {"fields": ["name", "description", "max_in_flight", "delivery"], "json": []},
     "entities": {"fields": ["domain_id", "name", "description", "kind", "context", "color", "pos"], "json": []},
-    "attributes": {"fields": ["entity_id", "name", "type", "required", "description"], "json": []},
+    "attributes": {"fields": ["entity_id", "name", "type", "required", "description", "verify", "domain", "initial"],
+                   "json": ["domain", "initial"]},
     "states": {"fields": ["entity_id", "name", "description", "is_initial", "is_final", "liveness", "pos"], "json": []},
     "transitions": {"fields": ["entity_id", "kind", "cascade_only", "from_state_id", "to_state_id", "action", "actor", "description",
                                "origin_effect_id"], "json": []},
     "guards": {"fields": ["transition_id", "kind", "entity_id", "state_ids", "negate", "description", "each_entity_id",
                           "alt_group"], "json": ["state_ids"]},
-    "effects": {"fields": ["transition_id", "entity_id", "kind", "to_state_id", "action", "skip_final", "description", "sources"],
+    "effects": {"fields": ["transition_id", "entity_id", "kind", "to_state_id", "action", "skip_final", "description", "sources",
+                           "expr", "deferred"],
                 "json": ["sources"]},
     "relations": {"fields": ["domain_id", "source_id", "target_id", "cardinality", "label", "composition", "instances"],
                   "json": []},
-    "invariants": {"fields": ["domain_id", "name", "description", "severity", "rules"], "json": ["rules"]},
+    "invariants": {"fields": ["domain_id", "name", "description", "severity", "rules", "expr"], "json": ["rules"]},
     "scenarios": {"fields": ["domain_id", "name", "description", "state", "history"], "json": ["state", "history"]},
-    "expectations": {"fields": ["domain_id", "name", "description", "kind", "rules", "trace", "expect"],
-                     "json": ["rules", "trace"]},
+    "expectations": {"fields": ["domain_id", "name", "description", "kind", "rules", "trace", "expect", "target"],
+                     "json": ["rules", "trace", "target"]},
 }
 
 
@@ -256,6 +271,15 @@ MIGRATIONS = [
     ("guards", "alt_group", "ALTER TABLE guards ADD COLUMN alt_group INTEGER NOT NULL DEFAULT 0"),
     ("effects", "sources", "ALTER TABLE effects ADD COLUMN sources TEXT"),
     ("transitions", "origin_effect_id", "ALTER TABLE transitions ADD COLUMN origin_effect_id INTEGER"),
+    ("attributes", "verify", "ALTER TABLE attributes ADD COLUMN verify INTEGER NOT NULL DEFAULT 0"),
+    ("attributes", "domain", "ALTER TABLE attributes ADD COLUMN domain TEXT"),
+    ("attributes", "initial", "ALTER TABLE attributes ADD COLUMN initial TEXT"),
+    ("effects", "expr", "ALTER TABLE effects ADD COLUMN expr TEXT NOT NULL DEFAULT ''"),
+    ("invariants", "expr", "ALTER TABLE invariants ADD COLUMN expr TEXT NOT NULL DEFAULT ''"),
+    ("effects", "deferred", "ALTER TABLE effects ADD COLUMN deferred INTEGER NOT NULL DEFAULT 0"),
+    ("domains", "max_in_flight", "ALTER TABLE domains ADD COLUMN max_in_flight INTEGER NOT NULL DEFAULT 2"),
+    ("domains", "delivery", "ALTER TABLE domains ADD COLUMN delivery TEXT NOT NULL DEFAULT 'exactly_once'"),
+    ("expectations", "target", "ALTER TABLE expectations ADD COLUMN target TEXT NOT NULL DEFAULT '[]'"),
 ]
 
 
